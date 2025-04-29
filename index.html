@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI-Powered Compliance Filing</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/aos@2.3.4/dist/aos.css" />
+  <style>
+    /* ========= Base ========= */
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:'Inter',sans-serif;background:#f9fafb;color:#1f2937;line-height:1.6;overflow-x:hidden}
+    :root{
+      --clr-primary:#2563eb;
+      --clr-primary-dark:#1e3a8a;
+      --clr-secondary:#facc15;
+      --clr-tertiary:#10b981;
+      --clr-base:#ffffff;
+    }
+    h1,h2,h3{color:#0f172a;line-height:1.25;margin-bottom:.75rem}
+    h1{font-size:3rem}
+    h2{font-size:2.25rem;text-align:center}
+    h3{font-size:1.3rem}
+    p{margin-bottom:1rem}
+    .container{max-width:1100px;margin:auto;padding:0 1rem}
+    .btn{display:inline-block;padding:.8rem 1.6rem;border-radius:10px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));transition:transform .3s,box-shadow .3s}
+    .btn:hover{transform:translateY(-4px);box-shadow:0 10px 25px rgba(0,0,0,.15)}
+
+    /* ========= Hero ========= */
+    header{position:relative;height:90vh;min-height:600px;color:#fff;overflow:hidden}
+    header video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:-2}
+    header .overlay{position:absolute;inset:0;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);z-index:-1}
+    .hero-content{position:relative;top:50%;transform:translateY(-50%);text-align:center;padding:0 1rem}
+    .hero-content h1{font-size:3.2rem;color:#fff;margin-bottom:1rem}
+    .hero-content p{color:#e5e7eb;font-size:1.125rem;margin-bottom:2rem}
+
+    /* ========= Sections ========= */
+    section{padding:5rem 0}
+    .grid-3{display:grid;gap:2rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+    .card{background:var(--clr-base);border-radius:16px;padding:2rem;box-shadow:0 4px 18px rgba(0,0,0,.05);transition:transform .3s,box-shadow .3s;cursor:pointer;position:relative;overflow:hidden}
+    .card:hover{transform:translateY(-8px) scale(1.03);box-shadow:0 12px 30px rgba(0,0,0,.12)}
+    .card img{width:52px;margin-bottom:1rem;transition:transform .5s}
+    .card:hover img{transform:rotate(10deg) scale(1.1)}
+
+    /* Interactive highlight bar */
+    .card::before{content:'';position:absolute;bottom:0;left:50%;width:0;height:4px;background:var(--clr-secondary);transition:width .3s,left .3s}
+    .card:hover::before{width:60%;left:20%}
+
+    /* ========= Glass CTA ========= */
+    .glass-card{background:rgba(255,255,255,.12);backdrop-filter:blur(60px);-webkit-backdrop-filter:blur(60px);border:2px solid rgba(255,255,255,.25);border-radius:16px;padding:3rem;box-shadow:0 0 60px rgba(0,0,0,.25);max-width:840px;margin:auto;text-align:center}
+
+    /* ========= Diagram ========= */
+    .diagram{display:flex;justify-content:center;margin-top:2rem}
+    svg{max-width:820px;width:100%}
+    .node{fill:#ffffff;stroke:#cbd5e1;stroke-width:2px}
+    .node-text{font-family:'Inter',sans-serif;font-size:14px;fill:#0f172a;font-weight:600;text-anchor:middle;dominant-baseline:middle}
+    .arrow{stroke:var(--clr-primary);stroke-width:2px;marker-end:url(#arrowhead)}
+
+    /* ========= Terminal ========= */
+    .terminal{background:#0f172a;color:#d1fae5;border-radius:12px;padding:1.25rem;font-family:monospace;font-size:.95rem;line-height:1.4;min-height:120px}
+    .terminal span.cursor{display:inline-block;width:8px;background:#d1fae5;margin-left:2px;animation:blink 1s steps(2,start) infinite}
+    @keyframes blink{to{background:transparent}}
+
+    /* ========= Responsive ========= */
+    @media(max-width:768px){h1{font-size:2.2rem}h2{font-size:1.8rem}.hero-content h1{font-size:2.4rem}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
+  </style>
+</head>
+<body>
+  <!-- Hero -->
+  <header>
+    <video autoplay loop muted playsinline poster="fallback.jpg"><source src="https://cdn.pixabay.com/video/2020/11/12/54525-475602729_large.mp4" type="video/mp4" /></video>
+    <div class="overlay"></div>
+    <div class="hero-content" data-aos="fade-down">
+      <h1>AI-Powered Compliance Filing</h1>
+      <p>From document to regulator in minutes – automated by GPT-4 & RPA.</p>
+      <a href="#story" class="btn">See How It Works</a>
+    </div>
+  </header>
+
+  <!-- Story -->
+  <section id="story">
+    <div class="container">
+      <h2 data-aos="fade-up">Meet Your AI Compliance Assistant</h2>
+      <div class="grid-3">
+        <div class="card" data-aos="flip-left"><img src="https://img.icons8.com/fluency/48/document--v1.png" alt="upload"/><h3>Upload Documents</h3><p>Drag & drop invoices or financials.</p></div>
+        <div class="card" data-aos="flip-left" data-aos-delay="100"><img src="https://img.icons8.com/fluency/48/artificial-intelligence.png" alt="ai"/><h3>AI Extracts Data</h3><p>GPT-4 parses & validates every field.</p></div>
+        <div class="card" data-aos="flip-left" data-aos-delay="200"><img src="https://img.icons8.com/fluency/48/approve-and-update.png" alt="file"/><h3>Instant Filing</h3><p>RPA bots submit forms, storing receipts.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Demo -->
+  <section id="demo" style="background:#f0f4ff">
+    <div class="container">
+      <h2 data-aos="fade-up">Watch AI Fill a Form</h2>
+      <div class="card demo" style="max-width:520px;margin:2rem auto" data-aos="zoom-in">
+        <input id="companyField" placeholder="Company Name" readonly />
+        <input id="reportField" placeholder="Report Title" readonly />
+        <input id="dateField" placeholder="Date" readonly />
+        <div class="terminal" id="terminal-main"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI Code Demos -->
+  <section id="actions">
+    <div class="container">
+      <h2 data-aos="fade-up">AI in Action – Code Demos</h2>
+      <div class="grid-3">
+        <div class="card"><div class="terminal" id="term-extract"></div></div>
+        <div class="card"><div class="terminal" id="term-search"></div></div>
+        <div class="card"><div class="terminal" id="term-submit"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Diagram -->
+  <section>
+    <div class="container" data-aos="fade-up">
+      <h2>Architecture Diagram</h2>
+      <div class="diagram">
+        <svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI Compliance Architecture">
+          <defs>
+            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+              <polygon points="0 0, 10 3.5, 0 7" fill="var(--clr-primary)" />
+            </marker>
+          </defs>
+          <rect x="30" y="80" width="130" height="60" rx="10" class="node" />
+          <text x="95" y="110" class="node-text">Data Sources</text>
+          <rect x="190" y="30" width="150" height="60" rx="10" class="node" />
+          <text x="265" y="60" class="node-text">Data Ingest API</text>
+          <rect x="190" y="130" width="150" height="60" rx="10" class="node" />
+          <text x="265" y="160" class="node-text">Vector DB</text>
+          <rect x="370" y="80" width="160" height="60" rx="10" class="node" />
+          <text x="450" y="110" class="node-text">GPT-4 Engine</text>
+          <rect x="570" y="30" width="150" height="60" rx="10" class="node" />
+          <text x="645" y="60" class="node-text">Validation</text>
+          <rect x="570" y="130" width="150" height="60" rx="10" class="node" />
+          <text x="645" y="160" class="node-text">RPA Bots</text>
+          <rect x="760" y="80" width="110" height="60" rx="10" class="node" />
+          <text x="815" y="110" class="node-text">Regulator</text>
+          <line x1="160" y1="110" x2="190" y2="60" class="arrow" />
+          <line x1="160" y1="110" x2="190" y2="160" class="arrow" />
+          <line x1="340" y1="60" x2="370" y2="110" class="arrow" />
+          <line x1="340" y1="160" x2="370" y2="110" class="arrow" />
+          <line x1="530" y1="110" x2="570" y2="60" class="arrow" />
+          <line x1="530" y1="110" x2="570" y2="160" class="arrow" />
+          <line x1="720" y1="60" x2="760" y2="110" class="arrow" />
+          <line x1="720" y1="160" x2="760" y2="110" class="arrow" />
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tech Stack -->
+  <section>
+    <div class="container">
+      <h2 data-aos="fade-up">Technology Stack</h2>
+      <div class="grid-3">
+        <div class="card" data-aos="fade-up"><h3>GPT-4 & Embeddings</h3><p>OpenAI + Pinecone vector DB.</p></div>
+        <div class="card" data-aos="fade-up" data-aos-delay="100"><h3>FastAPI & Storage</h3><p>Python FastAPI, PostgreSQL, AWS S3.</p></div>
+        <div class="card" data-aos="fade-up" data-aos-delay="200"><h3>Headless RPA</h3><p>Playwright bots orchestrated via Celery.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Glass CTA -->
+  <section>
+    <div class="glass-card" data-aos="zoom-in">
+      <h2>Ready to Transform Compliance?</h2>
+      <p>Let’s discuss how AI can streamline your regulatory filings.</p>
+      <a href="mailto:contact@telecom-ai.com" class="btn">Request a Demo</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">© 2025 AI Compliance Filing. All rights reserved.</div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12"></script>
+  <script src="https://unpkg.com/aos@2.3.4/dist/aos.js" defer onload="AOS.init({duration:800,once:true})"></script>
+  <script>
+    function playLines(id, lines, delay=900){
+      const term=document.getElementById(id);let i=0;
+      const interval=setInterval(()=>{if(i<lines.length){term.innerHTML+=lines[i]+"<br/>";i++;}else{term.innerHTML+='<span class="cursor"></span>';clearInterval(interval);}},delay);
+    }
+    function observeSection(sectionId, cb){const t=document.querySelector(sectionId);if(!t)return;const io=new IntersectionObserver(e=>{e.forEach(x=>{if(x.isIntersecting){cb();io.disconnect();}});},{threshold:0.5});io.observe(t);}  
+    observeSection('#demo',()=>{
+      new Typed('#companyField',{strings:['Acme Corporation'],typeSpeed:60,showCursor:false});
+      setTimeout(()=>new Typed('#reportField',{strings:['Q4 Revenue Report'],typeSpeed:60,showCursor:false}),1100);
+      setTimeout(()=>new Typed('#dateField',{strings:['31 Jan 2025'],typeSpeed:60,showCursor:false}),2200);
+      playLines('terminal-main',['> AI.extractData("report.pdf")','→ Filling form fields…','→ Uploading to portal…','→ Status: ✅ Filed Successfully!']);
+    });
+    observeSection('#actions',()=>{
+      playLines('term-extract',['> AI.parse("invoices.zip")','→ 124 invoices processed','→ Data normalized ✅']);
+      setTimeout(()=>playLines('term-search',['> AI.vectorSearch("FCC Part 69")','→ 5 relevant clauses found','→ Mapping to form fields… ✅']),600);
+      setTimeout(()=>playLines('term-submit',['> AI.RPA.submit("FCC-499A")','→ Authenticating…','→ Uploading PDF…','→ Submission ID: #8842 ✅']),1200);
+    });
+  </script>
+</body>
+</html>
