@@ -30,6 +30,19 @@ def index():
     return render_template('index.html', invoices=invoices)
 
 @app.route('/upload', methods=['GET', 'POST'])
+@app.route('/edit/<int:invoice_id>', methods=['GET', 'POST'])
+def edit_invoice(invoice_id):
+    invoice = Invoice.query.get_or_404(invoice_id)
+    if request.method == 'POST':
+        invoice.amount = request.form['amount']
+        invoice.date_due = request.form['date_due']
+        invoice.status = request.form['status']
+        invoice.client.email = request.form['client_email']
+        db.session.commit()
+        flash('Invoice updated successfully.')
+        return redirect('/')
+    return render_template('edit_invoice.html', invoice=invoice)
+
 @app.route('/export')
 @app.route('/export/<int:invoice_id>')
 def export_invoice(invoice_id):
