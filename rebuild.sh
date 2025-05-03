@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # Step 1: Pull latest changes from Git
+echo "Ensuring database is initialized..."
+python3 setup_db.py
 echo "Pulling latest changes from Git..."
 git pull
 
