@@ -31,8 +31,36 @@ class Invoice(db.Model):
     client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=False)
 
 # Routes
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def index():
+    if request.method == 'POST':
+        file = request.files.get('csv_file')
+        if not file or not file.filename.endswith('.csv'):
+            flash('Please upload a valid CSV file.')
+            return redirect(request.url)
+
+        df = pd.read_csv(file)
+        for _, row in df.iterrows():
+            client_name = row['client_name']
+            client = Client.query.filter_by(name=client_name).first()
+            if not client:
+                client = Client(name=client_name, email=row.get('client_email'))
+                db.session.add(client)
+                db.session.commit()
+
+            invoice = Invoice(
+                invoice_id=row['invoice_id'],
+                amount=row['amount'],
+                date_due=row['date_due'],
+                status=row['status'],
+                client_id=client.id
+            )
+            db.session.add(invoice)
+
+        db.session.commit()
+        flash('Invoices uploaded successfully.')
+        return redirect('/')
+
     invoices = Invoice.query.all()
     return render_template('index.html', invoices=invoices)
 
