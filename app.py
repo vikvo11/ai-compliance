@@ -12,6 +12,7 @@ db = SQLAlchemy(app)
 class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), unique=True, nullable=False)
+    email = db.Column(db.String(128), nullable=True)
     invoices = db.relationship('Invoice', backref='client', lazy=True)
 
 class Invoice(db.Model):
@@ -56,7 +57,7 @@ def upload():
             client_name = row['client_name']
             client = Client.query.filter_by(name=client_name).first()
             if not client:
-                client = Client(name=client_name)
+                client = Client(name=client_name, email=row.get('client_email'))
                 db.session.add(client)
                 db.session.commit()
 
