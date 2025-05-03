@@ -1,6 +1,9 @@
 #!/bin/bash
 
 # Step 1: Pull latest changes from Git
+echo "Ensuring local ./data directory exists with write permissions..."
+mkdir -p ./data
+chmod 777 ./data
 echo "Pulling latest changes from Git..."
 git pull
 
