@@ -115,7 +115,6 @@ def export_invoice(invoice_id=None):
     return df.to_csv(index=False), 200, {
         'Content-Type': 'text/csv',
         'Content-Disposition': f'attachment; filename={filename}'
-    }'}
 
 def export():
     invoices = Invoice.query.all()
