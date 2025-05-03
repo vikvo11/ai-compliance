@@ -8,6 +8,11 @@ app = Flask(__name__)
 app.secret_key = 'replace-this-secret'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
 db = SQLAlchemy(app)
+with app.app_context():
+    inspector = inspect(db.engine)
+    if not inspector.has_table("invoice"):
+        print("[INFO] Creating tables...")
+        db.create_all()
 
 # Models
 class Client(db.Model):
