@@ -1,2 +1,3 @@
 v0.1.0 - Created feature branch for new AI Compliance UI
 v0.2.1 - Implemented AI-driven compliance UI with invoice management, CSV import/export, editable interface, and responsive design
+v0.2.2 - Completed full-file audit including Docker, rebuild script, documentation and UI integration
