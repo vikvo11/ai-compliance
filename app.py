@@ -31,6 +31,14 @@ def index():
 
 @app.route('/upload', methods=['GET', 'POST'])
 @app.route('/edit/<int:invoice_id>', methods=['GET', 'POST'])
+@app.route('/delete/<int:invoice_id>', methods=['POST'])
+def delete_invoice(invoice_id):
+    invoice = Invoice.query.get_or_404(invoice_id)
+    db.session.delete(invoice)
+    db.session.commit()
+    flash('Invoice deleted successfully.')
+    return redirect('/')
+
 def edit_invoice(invoice_id):
     invoice = Invoice.query.get_or_404(invoice_id)
     if request.method == 'POST':
