@@ -88,18 +88,29 @@ def edit_invoice(invoice_id):
 
 @app.route('/export')
 @app.route('/export/<int:invoice_id>')
-def export_invoice(invoice_id):
-    inv = Invoice.query.get_or_404(invoice_id)
-    data = [{
-        'client_name': inv.client.name,
-        'client_email': inv.client.email,
-        'invoice_id': inv.invoice_id,
-        'amount': inv.amount,
-        'date_due': inv.date_due,
-        'status': inv.status
-    }]
+def export_invoice(invoice_id=None):
+        if invoice_id:
+        inv = Invoice.query.get_or_404(invoice_id)
+        data = [{
+            'client_name': inv.client.name,
+            'client_email': inv.client.email,
+            'invoice_id': inv.invoice_id,
+            'amount': inv.amount,
+            'date_due': inv.date_due,
+            'status': inv.status
+        }]
+    else:
+        invoices = Invoice.query.all()
+        data = [{
+            'client_name': inv.client.name,
+            'client_email': inv.client.email,
+            'invoice_id': inv.invoice_id,
+            'amount': inv.amount,
+            'date_due': inv.date_due,
+            'status': inv.status
+        } for inv in invoices]
     df = pd.DataFrame(data)
-    filename = f"invoice_{inv.invoice_id}.csv"
+    filename = f"invoice_{invoice_id}.csv" if invoice_id else "invoices.csv"
     return df.to_csv(index=False), 200, {'Content-Type': 'text/csv', 'Content-Disposition': f'attachment; filename={filename}'}
 
 def export():
