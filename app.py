@@ -25,7 +25,8 @@ class Invoice(db.Model):
 # Routes
 @app.route('/')
 def index():
-    return render_template('index.html')
+    invoices = Invoice.query.all()
+    return render_template('index.html', invoices=invoices)
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload():
