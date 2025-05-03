@@ -27,6 +27,34 @@
     }
 
     /* 
+      Toast container for showing messages at the bottom-right corner.
+    */
+    #toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 9999;
+    }
+    /* 
+      Toast appearance: green background, white text, some padding. 
+      Fading out is handled by JavaScript (or you can do a CSS animation).
+    */
+    .toast {
+      background: #22c55e; /* Tailwind's green-500 */
+      color: #fff;
+      padding: 0.8rem 1rem;
+      border-radius: 8px;
+      font-weight: 600;
+      min-width: 200px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      transition: opacity 0.8s ease;
+      opacity: 1;
+    }
+
+    /* 
       Base page styles 
     */
     * {
@@ -252,6 +280,9 @@
 </head>
 <body>
 
+  <!-- Toast container (for bottom-right ephemeral messages) -->
+  <div id="toast-container"></div>
+
   <!-- 
     Overlay drop area for drag-and-drop.
     Displayed via JavaScript on dragenter, hidden on drop/leave.
@@ -287,6 +318,7 @@
       <!-- 
         Display flash messages: if there's more than one, loop over them 
         (handles messages like "Invoice updated successfully", "Invoice deleted", etc.)
+        Kept here as a fallback if you also want server-side messages (optional).
       -->
       {% with messages = get_flashed_messages() %}
         {% if messages %}
@@ -357,14 +389,22 @@
           </thead>
           <tbody>
             {% for inv in invoices %}
+            <!-- 
+              Each row has unique IDs so we can update them after saving. 
+              Example: "invoice-{{inv.id}}-client", "invoice-{{inv.id}}-amount", etc.
+            -->
             <tr>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
+              <td id="invoice-{{ inv.id }}-client" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
+              <td id="invoice-{{ inv.id }}-invoiceID" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
+              <td id="invoice-{{ inv.id }}-amount" style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
+              <td id="invoice-{{ inv.id }}-due" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
+              <td id="invoice-{{ inv.id }}-status" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
               <td style="padding:8px; border-bottom:1px solid #eee;">
-                <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
+                <a class="btn" 
+                   style="padding:0.3rem 1rem; font-size:0.8rem;" 
+                   href="/export/{{ inv.id }}">
+                  Download
+                </a>
                 <div style="display:inline-block; margin-right:6px;">
                   <button type="button" class="btn" 
                           onclick="toggleEdit({{ inv.id }})" 
@@ -383,9 +423,15 @@
                 </form>
               </td>
             </tr>
+            <!-- 
+              "Edit" row uses an onsubmit handler that prevents page reload. 
+              We do fetch to /edit/{{inv.id}} returning JSON. 
+              Then we update the row with new data. 
+            -->
             <tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
               <td colspan="6">
-                <form method="POST" action="/edit/{{ inv.id }}" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <form onsubmit="saveInvoice(event, {{ inv.id }})" 
+                      style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
                   <input type="email" name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
                   <input type="number" name="amount" step="0.01" value="{{ inv.amount }}" placeholder="Amount">
                   <input type="text" name="date_due" value="{{ inv.date_due }}" placeholder="Due Date">
@@ -579,6 +625,69 @@
     });
 
     /*
+      Helper to show a "toast" message at the bottom-right.
+      Automatically fades out after 3 seconds.
+    */
+    function showToast(message) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.classList.add('toast');
+      toast.textContent = message;
+      container.appendChild(toast);
+
+      // Fade out and remove after 3 seconds
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => container.removeChild(toast), 800);
+      }, 3000);
+    }
+
+    /*
+      This prevents the normal form submission for editing an invoice.
+      We do an AJAX call to /edit/<id> and expect JSON response:
+        {
+          "client_name": "...",
+          "invoice_id": "...",
+          "amount": 123.45,
+          "date_due": "YYYY-MM-DD",
+          "status": "paid" 
+        }
+      Then we update that row in the table and show a toast at the bottom.
+    */
+    async function saveInvoice(event, invoiceId) {
+      event.preventDefault(); // No page reload
+      try {
+        const form = event.target;
+        const formData = new FormData(form);
+
+        const response = await fetch(`/edit/${invoiceId}`, {
+          method: 'POST',
+          body: formData
+        });
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+        const data = await response.json();
+
+        // Update the table row with new data:
+        document.getElementById(`invoice-${invoiceId}-client`).textContent = data.client_name;
+        document.getElementById(`invoice-${invoiceId}-invoiceID`).textContent = data.invoice_id;
+        document.getElementById(`invoice-${invoiceId}-amount`).textContent = `$${parseFloat(data.amount).toFixed(2)}`;
+        document.getElementById(`invoice-${invoiceId}-due`).textContent = data.date_due;
+        document.getElementById(`invoice-${invoiceId}-status`).textContent = data.status;
+
+        // Hide the edit row
+        document.getElementById(`edit-row-${invoiceId}`).style.display = 'none';
+
+        // Show success toast
+        showToast('Invoice updated successfully!');
+      } catch (err) {
+        console.error(err);
+        showToast('Error updating invoice.');
+      }
+    }
+
+    /*
       Typing effect helper:
       Writes text character by character into placeholders or values
     */
@@ -682,7 +791,7 @@
     */
     function toggleEdit(id) {
       const row = document.getElementById(`edit-row-${id}`);
-      row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+      row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
     }
   </script>
 
