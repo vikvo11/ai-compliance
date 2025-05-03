@@ -7,7 +7,7 @@ from sqlalchemy import inspect
 
 app = Flask(__name__)
 app.secret_key = 'replace-this-secret'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data/data.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////app/data/data.db'
 db = SQLAlchemy(app)
 with app.app_context():
     inspector = inspect(db.engine)
