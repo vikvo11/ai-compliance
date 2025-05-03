@@ -392,6 +392,21 @@ All comments in English.
     </form>
   </td>
 </tr>
+
+<tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
+  <td colspan="6">
+    <form method="POST" action="/edit/{{ inv.id }}" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <input type="email" name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
+      <input type="number" name="amount" step="0.01" value="{{ inv.amount }}" placeholder="Amount">
+      <input type="text" name="date_due" value="{{ inv.date_due }}" placeholder="Due Date">
+      <select name="status">
+        <option value="unpaid" {% if inv.status == 'unpaid' %}selected{% endif %}>Unpaid</option>
+        <option value="paid" {% if inv.status == 'paid' %}selected{% endif %}>Paid</option>
+      </select>
+      <button class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;">Save</button>
+    </form>
+  </td>
+</tr>
             
           </tbody>
         </table>
