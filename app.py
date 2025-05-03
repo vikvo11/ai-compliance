@@ -84,7 +84,7 @@ def edit_invoice(invoice_id):
         db.session.commit()
         flash('Invoice updated successfully.')
         return redirect('/')
-    return render_template('edit_invoice.html', invoice=invoice)
+    return redirect('/')
 
 @app.route('/export')
 @app.route('/export/<int:invoice_id>')
