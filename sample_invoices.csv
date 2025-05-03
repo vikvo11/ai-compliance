@@ -1,0 +1,4 @@
+client_name,invoice_id,amount,date_due,status
+Acme Corp,INV-001,1500.50,2024-12-01,unpaid
+Acme Corp,INV-002,2200.00,2025-01-15,paid
+Beta Inc,INV-101,870.00,2025-02-10,unpaid
