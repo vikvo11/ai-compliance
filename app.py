@@ -113,7 +113,10 @@ def upload():
     return render_template('upload.html')
 
 if __name__ == '__main__':
-    if not os.path.exists('data.db'):
-        with app.app_context():
+    with app.app_context():
+        try:
+            db.session.execute('SELECT 1 FROM invoice LIMIT 1')
+        except Exception:
+            print("[INFO] Creating tables...")
             db.create_all()
     app.run(debug=True)
