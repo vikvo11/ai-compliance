@@ -161,6 +161,7 @@ svg{max-width:820px;width:100%}
             <td style="padding:8px;border-bottom:1px solid #eee">${{ '%.2f' % inv.amount }}</td>
             <td style="padding:8px;border-bottom:1px solid #eee">{{ inv.date_due }}</td>
             <td style="padding:8px;border-bottom:1px solid #eee">{{ inv.status }}</td>
+<td style="padding:8px;border-bottom:1px solid #eee"><a class="btn" style="padding:0.3rem 1rem;font-size:0.8rem" href="/export/{{ inv.id }}">Download</a></td>
           </tr>
           {% endfor %}
         </tbody>
