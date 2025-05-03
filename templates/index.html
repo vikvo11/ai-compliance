@@ -1,9 +1,3 @@
-<!-- 
-Full working example with drag-and-drop for "Upload Documents," 
-keeping the "Show Uploaded Invoices" button in the same card, 
-but placing the invoice table and "Download CSV" button in a separate section below.
-All comments in English.
--->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -344,7 +338,7 @@ All comments in English.
       <!-- The invoice table is hidden by default (toggled by the button) -->
       <div id="invoiceTable" 
            style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
-<table style="width:100%; border-collapse:collapse;">
+        <table style="width:100%; border-collapse:collapse;">
           <thead>
             <tr>
               <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
@@ -365,7 +359,13 @@ All comments in English.
               <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
               <td style="padding:8px; border-bottom:1px solid #eee;">
                 <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
-                <div style="display:inline-block; margin-right:6px;"><button type="button" class="btn" onclick="toggleEdit({{ inv.id }})" style="padding:0.3rem 1rem; font-size:0.8rem;">Edit</button></div>
+                <div style="display:inline-block; margin-right:6px;">
+                  <button type="button" class="btn" 
+                          onclick="toggleEdit({{ inv.id }})" 
+                          style="padding:0.3rem 1rem; font-size:0.8rem;">
+                    Edit
+                  </button>
+                </div>
                 <form method="POST" 
                       action="/delete/{{ inv.id }}" 
                       onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
@@ -377,20 +377,28 @@ All comments in English.
                 </form>
               </td>
             </tr>
-            
-
-{% endfor %}
-
-
-
-            
+            <!-- Only one edit row (removed duplicate) -->
+            <tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
+              <td colspan="6">
+                <form method="POST" action="/edit/{{ inv.id }}" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                  <input type="email" name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
+                  <input type="number" name="amount" step="0.01" value="{{ inv.amount }}" placeholder="Amount">
+                  <input type="text" name="date_due" value="{{ inv.date_due }}" placeholder="Due Date">
+                  <select name="status">
+                    <option value="unpaid" {% if inv.status == 'unpaid' %}selected{% endif %}>Unpaid</option>
+                    <option value="paid" {% if inv.status == 'paid' %}selected{% endif %}>Paid</option>
+                  </select>
+                  <button class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;">Save</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
           </tbody>
         </table>
-<div style="margin-top:0.5rem; padding-left:8px; text-align:left;"><a href="/export" class="btn" style="font-size:0.75rem; padding:0.4rem 1rem;">Download CSV</a></div>
+        <div style="margin-top:0.5rem; padding-left:8px; text-align:left;">
+          <a href="/export" class="btn" style="font-size:0.75rem; padding:0.4rem 1rem;">Download CSV</a>
+        </div>
       </div>
-
-      <!-- Download CSV button placed below the table -->
-      
     </div>
   </section>
   {% endif %}
@@ -662,10 +670,16 @@ All comments in English.
         '→ Submission ID: #8842 ✅'
       ]), 1600);
     });
-  </script>
+
+    /*
+      Toggles the edit form row for a particular invoice.
+      Shows/hides the row with 'edit-row-{id}'.
+    */
     function toggleEdit(id) {
       const row = document.getElementById(`edit-row-${id}`);
       row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
     }
+  </script>
+
 </body>
 </html>
