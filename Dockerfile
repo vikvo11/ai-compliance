@@ -6,6 +6,7 @@ COPY . .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN mkdir -p /app/data
 EXPOSE 5005
 
 CMD ["python", "app.py"]
