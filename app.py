@@ -29,6 +29,21 @@ def index():
     return render_template('index.html', invoices=invoices)
 
 @app.route('/upload', methods=['GET', 'POST'])
+@app.route('/export')
+def export():
+    invoices = Invoice.query.all()
+    data = []
+    for inv in invoices:
+        data.append({
+            'client_name': inv.client.name,
+            'invoice_id': inv.invoice_id,
+            'amount': inv.amount,
+            'date_due': inv.date_due,
+            'status': inv.status
+        })
+    df = pd.DataFrame(data)
+    return df.to_csv(index=False), 200, {'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename=invoices.csv'}
+
 def upload():
     if request.method == 'POST':
         file = request.files.get('csv_file')
