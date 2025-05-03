@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, flash
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
 import os
+from sqlalchemy import inspect
 
 app = Flask(__name__)
 app.secret_key = 'replace-this-secret'
@@ -114,9 +115,8 @@ def upload():
 
 if __name__ == '__main__':
     with app.app_context():
-        try:
-            db.session.execute('SELECT 1 FROM invoice LIMIT 1')
-        except Exception:
+        inspector = inspect(db.engine)
+        if not inspector.has_table("invoice"):
             print("[INFO] Creating tables...")
             db.create_all()
     app.run(debug=True)
