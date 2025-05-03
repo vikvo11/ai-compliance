@@ -272,23 +272,29 @@
   <section id="story" class="fade">
     <div class="container">
       <h2>Meet Your AI Compliance Assistant</h2>
-      <!-- 
-        File upload form (same route used for drag-and-drop).
-      -->
-      <form method="POST" enctype="multipart/form-data" style="margin-top:2rem; text-align:center;">
-        <label style="display:block; margin-bottom:0.5rem; font-weight:600;">Upload Invoice CSV:</label>
-        <input type="file" name="csv_file" accept=".csv" required 
-               style="margin-bottom:1rem; padding:.5rem; border-radius:6px; border:1px solid #ccc;">
-        <br>
-        <button type="submit" class="btn">Upload</button>
-      </form>
+      
+      <!-- Hide the "Upload Invoice CSV" form by using a wrapper with display:none -->
+      <div style="display:none;">
+        <form method="POST" enctype="multipart/form-data" style="margin-top:2rem; text-align:center;">
+          <label style="display:block; margin-bottom:0.5rem; font-weight:600;">Upload Invoice CSV:</label>
+          <input type="file" name="csv_file" accept=".csv" required 
+                 style="margin-bottom:1rem; padding:.5rem; border-radius:6px; border:1px solid #ccc;">
+          <br>
+          <button type="submit" class="btn">Upload</button>
+        </form>
+      </div>
 
-      <!-- Flash message (e.g. success/error) -->
+      <!-- 
+        Display flash messages: if there's more than one, loop over them 
+        (handles messages like "Invoice updated successfully", "Invoice deleted", etc.)
+      -->
       {% with messages = get_flashed_messages() %}
         {% if messages %}
-          <div style="margin-top:1rem; color:green; font-weight:600;">
-            {{ messages[0] }}
-          </div>
+          {% for msg in messages %}
+            <div style="margin-top:1rem; color:green; font-weight:600;">
+              {{ msg }}
+            </div>
+          {% endfor %}
         {% endif %}
       {% endwith %}
 
@@ -377,7 +383,6 @@
                 </form>
               </td>
             </tr>
-            <!-- Only one edit row (removed duplicate) -->
             <tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
               <td colspan="6">
                 <form method="POST" action="/edit/{{ inv.id }}" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
