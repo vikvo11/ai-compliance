@@ -5,24 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>AI‑Powered Compliance Filing</title>
 <style>
-/* drag-and-drop overlay styling */
-#drop-area {
-  display: none;
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: rgba(0, 0, 0, 0.5);
-  color: white;
-  font-size: 1.5rem;
-  font-weight: bold;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-}
-.card:hover #drop-area {
-  display: flex;
-}
-/* base styles */
+/* ===== Base ===== */
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f9fafb;color:#1f2937;line-height:1.6;overflow-x:hidden}
@@ -39,11 +22,11 @@ p{margin-bottom:1rem}
 .container{max-width:1100px;padding:0 1rem;margin:auto}
 .btn{display:inline-block;padding:.8rem 1.6rem;border-radius:10px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));text-decoration:none;transition:transform .3s,box-shadow .3s}
 .btn:hover{transform:translateY(-4px);box-shadow:0 10px 25px rgba(0,0,0,.15)}
-/* Hero */
+/* ===== Hero ===== */
 header{background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));color:#fff;padding:5rem 1rem;text-align:center}
 header h1{font-size:3rem;margin-bottom:1rem}
 header p{font-size:1.125rem;margin-bottom:2rem}
-/* Sections */
+/* ===== Sections ===== */
 section{padding:4rem 0}
 .grid-3{display:grid;gap:2rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .card{background:#fff;border-radius:16px;padding:2rem;box-shadow:0 4px 18px rgba(0,0,0,.05);transition:transform .3s,box-shadow .3s;cursor:pointer;position:relative;overflow:hidden}
@@ -52,18 +35,19 @@ section{padding:4rem 0}
 .card:hover .icon{transform:rotate(10deg) scale(1.1)}
 .card::before{content:"";position:absolute;bottom:0;left:50%;width:0;height:4px;background:var(--clr-secondary);transition:width .3s,left .3s}
 .card:hover::before{width:60%;left:20%}
-/* Terminal */
+/* ===== Terminal ===== */
 .terminal{background:#0f172a;color:#d1fae5;border-radius:12px;padding:1rem;font-family:monospace;font-size:.9rem;line-height:1.4;min-height:110px}
 .cursor{display:inline-block;width:8px;background:#d1fae5;margin-left:2px;animation:blink 1s steps(2,start) infinite}
 @keyframes blink{to{background:transparent}}
-/* Diagram */
+/* ===== Diagram ===== */
 .diagram{display:flex;justify-content:center;margin-top:2rem}
 svg{max-width:820px;width:100%}
 .node{fill:#fff;stroke:#cbd5e1;stroke-width:2}
 .node-text{font-family:inherit;font-size:14px;fill:#0f172a;font-weight:600;text-anchor:middle;dominant-baseline:middle}
 .arrow{stroke:var(--clr-primary);stroke-width:2;marker-end:url(#ah)}
-/* CTA */
+/* ===== CTA ===== */
 .glass{background:rgba(255,255,255,.15);backdrop-filter:blur(45px);border-radius:16px;padding:3rem;text-align:center;margin:auto;max-width:800px}
+/* ===== Fade animation ===== */
 .fade{opacity:0;transform:translateY(40px);transition:opacity .8s ease,transform .8s ease}
 .fade.show{opacity:1;transform:none}
 @media(max-width:768px){h1{font-size:2rem}h2{font-size:1.6rem}}
@@ -75,28 +59,4 @@ svg{max-width:820px;width:100%}
   <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
   <a href="#story" class="btn">See How It Works</a>
 </header>
-<!-- upload form + drop zone + invoice toggle here -->
-<script>
-function handleDrag(e) {
-  e.preventDefault();
-}
-function handleDrop(e) {
-  e.preventDefault();
-  const files = e.dataTransfer.files;
-  if (files.length && files[0].type === 'text/csv') {
-    const formData = new FormData();
-    formData.append('csv_file', files[0]);
-    fetch('/', { method: 'POST', body: formData })
-      .then(() => location.reload())
-      .catch(() => alert('Upload failed'));
-  } else {
-    alert('Please drop a valid CSV file.');
-  }
-}
-function toggleInvoices() {
-  const tbl = document.getElementById('invoiceTable');
-  tbl.style.display = tbl.style.display === 'none' ? 'block' : 'none';
-}
-</script>
-</body>
-</html>
+...TRUNCATED...
