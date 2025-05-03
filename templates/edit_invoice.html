@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edit Invoice</title>
+</head>
+<body>
+    <h2>Edit Invoice {{ invoice.invoice_id }}</h2>
+    <form method="POST">
+        <label>Client Name:</label><br>
+        <input type="text" name="client_name" value="{{ invoice.client.name }}" readonly><br><br>
+
+        <label>Client Email:</label><br>
+        <input type="email" name="client_email" value="{{ invoice.client.email or '' }}"><br><br>
+
+        <label>Amount:</label><br>
+        <input type="number" name="amount" step="0.01" value="{{ invoice.amount }}"><br><br>
+
+        <label>Due Date:</label><br>
+        <input type="text" name="date_due" value="{{ invoice.date_due }}"><br><br>
+
+        <label>Status:</label><br>
+        <select name="status">
+            <option value="unpaid" {% if invoice.status == 'unpaid' %}selected{% endif %}>Unpaid</option>
+            <option value="paid" {% if invoice.status == 'paid' %}selected{% endif %}>Paid</option>
+        </select><br><br>
+
+        <button type="submit">Save Changes</button>
+    </form>
+    <p><a href="/">Back to Dashboard</a></p>
+</body>
+</html>
