@@ -1,13 +1,16 @@
 <!-- 
 Full working example with drag and drop for "Upload Documents" 
-that behaves the same way as the "Upload Invoice CSV" form.
+that behaves like "Upload Invoice CSV," but now:
+ - The "Show Uploaded Invoices" button is only shown if there are invoices.
+ - The invoice list is placed right below the upload section, 
+   not at the very bottom of the page.
 All comments in English. 
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI‑Powered Compliance Filing</title>
   <style>
     /* 
@@ -299,13 +302,58 @@ All comments in English.
         {% endif %}
       {% endwith %}
 
-      <!-- Toggle invoices button -->
-      <div style="text-align:center; margin:2rem auto;">
-        <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
-      </div>
+      <!-- 
+        Only show the "Show Uploaded Invoices" button if we actually have invoices.
+        Also put the invoice table here, so it won't be at the bottom of the page.
+      -->
+      {% if invoices|length > 0 %}
+        <div style="text-align:center; margin:2rem auto;">
+          <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
+          <a href="/export" class="btn" style="margin-left:1rem;">Download CSV</a>
+        </div>
+        <div id="invoiceTable" 
+             style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for inv in invoices %}
+              <tr>
+                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
+                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
+                <td style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
+                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
+                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
+                <td style="padding:8px; border-bottom:1px solid #eee;">
+                  <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
+                  <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/edit/{{ inv.id }}">Edit</a>
+                  <form method="POST" 
+                        action="/delete/{{ inv.id }}" 
+                        onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
+                        style="display:inline-block;">
+                    <button type="submit" class="btn" 
+                            style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
+                      Delete
+                    </button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
 
       <!-- Feature cards -->
-      <div class="grid-3">
+      <div class="grid-3" style="margin-top:3rem;">
         <div class="card">
           <div class="icon">📄</div>
           <h3>Upload Documents</h3>
@@ -367,6 +415,7 @@ All comments in English.
               <polygon points="0 0,10 3.5,0 7" fill="var(--clr-primary)"/>
             </marker>
           </defs>
+
           <rect x="30" y="80" width="130" height="60" rx="10" class="node"/>
           <text x="95" y="110" class="node-text">Data Sources</text>
 
@@ -406,55 +455,6 @@ All comments in English.
       <h2>Ready to Transform Compliance?</h2>
       <p>Let’s discuss how AI can streamline your regulatory filings.</p>
       <a class="btn" href="mailto:contact@telecom-ai.com">Request a Demo</a>
-    </div>
-  </section>
-
-  <!-- 
-    Invoices Table & CSV Export 
-  -->
-  <section class="fade">
-    <div class="container" style="text-align:center;">
-      <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
-      <a href="/export" class="btn" style="margin-top:1rem; display:inline-block;">Download CSV</a>
-      <div id="invoiceTable" 
-           style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
-        <table style="width:100%; border-collapse:collapse;">
-          <thead>
-            <tr>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for inv in invoices %}
-            <tr>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">
-                <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
-                <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/edit/{{ inv.id }}">Edit</a>
-                <form method="POST" 
-                      action="/delete/{{ inv.id }}" 
-                      onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
-                      style="display:inline-block;">
-                  <button type="submit" class="btn" 
-                          style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
-                    Delete
-                  </button>
-                </form>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
     </div>
   </section>
 
