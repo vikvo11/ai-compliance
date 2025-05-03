@@ -120,6 +120,10 @@ svg{max-width:820px;width:100%}
   <button type="submit" class="btn">Upload</button>
 </form>
 {% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <div style="margin-top:1rem;color:green;font-weight:600">
+      {{ messages[0] }}
+    </div>
   {% endif %}
 {% endwith %}
 <div style="text-align:center;margin:2rem auto">
@@ -134,6 +138,7 @@ svg{max-width:820px;width:100%}
 </div>
 
     <div class="card"><div class="icon">📄</div>
+<div id="drop-area" ondrop="handleDrop(event)" ondragover="handleDrag(event)">Drop CSV file here</div>
 <div id="drop-area" ondrop="handleDrop(event)" ondragover="handleDrag(event)">Drop CSV file here</div>
 <div id="drop-area" ondrop="handleDrop(event)" ondragover="handleDrag(event)">Drop CSV file here</div>
 
@@ -270,6 +275,22 @@ function handleDrop(e) {
     formData.append('csv_file', files[0]);
     fetch('/', { method: 'POST', body: formData })
       .then(() => location.reload())
+      .catch(() => alert('Upload failed'));
+  } else {
+    alert('Please drop a valid CSV file.');
+  }
+}
+function handleDrag(e) {
+  e.preventDefault();
+}
+function handleDrop(e) {
+  e.preventDefault();
+  const files = e.dataTransfer.files;
+  if (files.length && files[0].type === 'text/csv') {
+    const formData = new FormData();
+    formData.append('csv_file', files[0]);
+    fetch('/', { method: 'POST', body: formData })
+      .then(() => location.reload())
       .catch(err => alert('Upload failed'));
   } else {
     alert('Please drop a valid CSV file.');
@@ -315,6 +336,22 @@ function handleDrop(e) {
 <footer style="padding:2rem 0;text-align:center;color:#6b7280;font-size:.9rem">© 2025 AI Compliance Filing</footer>
 
 <script>
+function handleDrag(e) {
+  e.preventDefault();
+}
+function handleDrop(e) {
+  e.preventDefault();
+  const files = e.dataTransfer.files;
+  if (files.length && files[0].type === 'text/csv') {
+    const formData = new FormData();
+    formData.append('csv_file', files[0]);
+    fetch('/', { method: 'POST', body: formData })
+      .then(() => location.reload())
+      .catch(() => alert('Upload failed'));
+  } else {
+    alert('Please drop a valid CSV file.');
+  }
+}
 function handleDrag(e) {
   e.preventDefault();
 }
