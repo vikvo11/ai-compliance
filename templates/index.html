@@ -1,62 +1,466 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>AI‑Powered Compliance Filing</title>
-<style>
-/* ===== Base ===== */
-*{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f9fafb;color:#1f2937;line-height:1.6;overflow-x:hidden}
-:root{
-  --clr-primary:#2563eb;
-  --clr-primary-dark:#1e3a8a;
-  --clr-secondary:#facc15;
-}
-h1,h2,h3{color:#0f172a;line-height:1.2;margin-bottom:.75rem}
-h1{font-size:2.7rem}
-h2{font-size:2rem;text-align:center}
-h3{font-size:1.25rem}
-p{margin-bottom:1rem}
-.container{max-width:1100px;padding:0 1rem;margin:auto}
-.btn{display:inline-block;padding:.8rem 1.6rem;border-radius:10px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));text-decoration:none;transition:transform .3s,box-shadow .3s}
-.btn:hover{transform:translateY(-4px);box-shadow:0 10px 25px rgba(0,0,0,.15)}
-/* ===== Hero ===== */
-header{background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));color:#fff;padding:5rem 1rem;text-align:center}
-header h1{font-size:3rem;margin-bottom:1rem}
-header p{font-size:1.125rem;margin-bottom:2rem}
-/* ===== Sections ===== */
-section{padding:4rem 0}
-.grid-3{display:grid;gap:2rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-.card{background:#fff;border-radius:16px;padding:2rem;box-shadow:0 4px 18px rgba(0,0,0,.05);transition:transform .3s,box-shadow .3s;cursor:pointer;position:relative;overflow:hidden}
-.card:hover{transform:translateY(-8px) scale(1.03);box-shadow:0 12px 30px rgba(0,0,0,.12)}
-.icon{font-size:2.7rem;margin-bottom:1rem;transition:transform .5s}
-.card:hover .icon{transform:rotate(10deg) scale(1.1)}
-.card::before{content:"";position:absolute;bottom:0;left:50%;width:0;height:4px;background:var(--clr-secondary);transition:width .3s,left .3s}
-.card:hover::before{width:60%;left:20%}
-/* ===== Terminal ===== */
-.terminal{background:#0f172a;color:#d1fae5;border-radius:12px;padding:1rem;font-family:monospace;font-size:.9rem;line-height:1.4;min-height:110px}
-.cursor{display:inline-block;width:8px;background:#d1fae5;margin-left:2px;animation:blink 1s steps(2,start) infinite}
-@keyframes blink{to{background:transparent}}
-/* ===== Diagram ===== */
-.diagram{display:flex;justify-content:center;margin-top:2rem}
-svg{max-width:820px;width:100%}
-.node{fill:#fff;stroke:#cbd5e1;stroke-width:2}
-.node-text{font-family:inherit;font-size:14px;fill:#0f172a;font-weight:600;text-anchor:middle;dominant-baseline:middle}
-.arrow{stroke:var(--clr-primary);stroke-width:2;marker-end:url(#ah)}
-/* ===== CTA ===== */
-.glass{background:rgba(255,255,255,.15);backdrop-filter:blur(45px);border-radius:16px;padding:3rem;text-align:center;margin:auto;max-width:800px}
-/* ===== Fade animation ===== */
-.fade{opacity:0;transform:translateY(40px);transition:opacity .8s ease,transform .8s ease}
-.fade.show{opacity:1;transform:none}
-@media(max-width:768px){h1{font-size:2rem}h2{font-size:1.6rem}}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI‑Powered Compliance Filing</title>
+  <style>
+    /* ===== Drop Area Overlay ===== */
+    #drop-area {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      font-size: 1.5rem;
+      font-weight: bold;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .card:hover #drop-area {
+      display: flex;
+    }
+
+    /* ===== Base Styles ===== */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #f9fafb;
+      color: #1f2937;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    :root {
+      --clr-primary: #2563eb;
+      --clr-primary-dark: #1e3a8a;
+      --clr-secondary: #facc15;
+    }
+    h1, h2, h3 { color: #0f172a; line-height: 1.2; margin-bottom: .75rem; }
+    h1 { font-size: 2.7rem; }
+    h2 { font-size: 2rem; text-align: center; }
+    h3 { font-size: 1.25rem; }
+    p { margin-bottom: 1rem; }
+    .container { max-width: 1100px; padding: 0 1rem; margin: auto; }
+    .btn {
+      display: inline-block;
+      padding: .8rem 1.6rem;
+      border-radius: 10px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, var(--clr-primary-dark), var(--clr-primary));
+      text-decoration: none;
+      transition: transform .3s, box-shadow .3s;
+    }
+    .btn:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 10px 25px rgba(0,0,0,.15);
+    }
+
+    /* ===== Hero Section ===== */
+    header {
+      background: linear-gradient(135deg, var(--clr-primary-dark), var(--clr-primary));
+      color: #fff;
+      padding: 5rem 1rem;
+      text-align: center;
+    }
+    header h1 { font-size: 3rem; margin-bottom: 1rem; }
+    header p { font-size: 1.125rem; margin-bottom: 2rem; }
+
+    /* ===== Sections ===== */
+    section { padding: 4rem 0; }
+    .grid-3 {
+      display: grid;
+      gap: 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 4px 18px rgba(0,0,0,.05);
+      transition: transform .3s, box-shadow .3s;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    .card:hover {
+      transform: translateY(-8px) scale(1.03);
+      box-shadow: 0 12px 30px rgba(0,0,0,.12);
+    }
+    .icon {
+      font-size: 2.7rem;
+      margin-bottom: 1rem;
+      transition: transform .5s;
+    }
+    .card:hover .icon {
+      transform: rotate(10deg) scale(1.1);
+    }
+    .card::before {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      width: 0;
+      height: 4px;
+      background: var(--clr-secondary);
+      transition: width .3s, left .3s;
+    }
+    .card:hover::before {
+      width: 60%;
+      left: 20%;
+    }
+
+    /* ===== Terminal Styles ===== */
+    .terminal {
+      background: #0f172a;
+      color: #d1fae5;
+      border-radius: 12px;
+      padding: 1rem;
+      font-family: monospace;
+      font-size: .9rem;
+      line-height: 1.4;
+      min-height: 110px;
+    }
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      background: #d1fae5;
+      margin-left: 2px;
+      animation: blink 1s steps(2, start) infinite;
+    }
+    @keyframes blink { to { background: transparent; } }
+
+    /* ===== Diagram ===== */
+    .diagram { display: flex; justify-content: center; margin-top: 2rem; }
+    svg { max-width: 820px; width: 100%; }
+    .node {
+      fill: #fff;
+      stroke: #cbd5e1;
+      stroke-width: 2;
+    }
+    .node-text {
+      font-family: inherit;
+      font-size: 14px;
+      fill: #0f172a;
+      font-weight: 600;
+      text-anchor: middle;
+      dominant-baseline: middle;
+    }
+    .arrow {
+      stroke: var(--clr-primary);
+      stroke-width: 2;
+      marker-end: url(#ah);
+    }
+
+    /* ===== Glass CTA ===== */
+    .glass {
+      background: rgba(255,255,255,.15);
+      backdrop-filter: blur(45px);
+      border-radius: 16px;
+      padding: 3rem;
+      text-align: center;
+      margin: auto;
+      max-width: 800px;
+    }
+
+    /* ===== Fade Animation ===== */
+    .fade {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity .8s ease, transform .8s ease;
+    }
+    .fade.show {
+      opacity: 1;
+      transform: none;
+    }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 768px) {
+      h1 { font-size: 2rem; }
+      h2 { font-size: 1.6rem; }
+    }
+  </style>
 </head>
 <body>
-<header>
-  <h1>AI‑Powered Compliance Filing</h1>
-  <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
-  <a href="#story" class="btn">See How It Works</a>
-</header>
-...TRUNCATED...
+
+  <header>
+    <h1>AI‑Powered Compliance Filing</h1>
+    <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
+    <a href="#story" class="btn">See How It Works</a>
+  </header>
+
+  <section id="story" class="fade">
+    <div class="container">
+      <h2>Meet Your AI Compliance Assistant</h2>
+      <!-- File upload form -->
+      <form method="POST" enctype="multipart/form-data" style="margin-top:2rem; text-align:center;">
+        <label style="display:block; margin-bottom:0.5rem; font-weight:600;">Upload Invoice CSV:</label>
+        <input type="file" name="csv_file" accept=".csv" required style="margin-bottom:1rem; padding:.5rem; border-radius:6px; border:1px solid #ccc;">
+        <br>
+        <button type="submit" class="btn">Upload</button>
+      </form>
+      <!-- Flash message display -->
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div style="margin-top:1rem; color:green; font-weight:600;">
+            {{ messages[0] }}
+          </div>
+        {% endif %}
+      {% endwith %}
+      <!-- Toggle invoices button -->
+      <div style="text-align:center; margin:2rem auto;">
+        <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
+      </div>
+
+      <!-- Feature cards -->
+      <div class="grid-3">
+        <div class="card">
+          <div class="icon">📄</div>
+          <!-- Drop area overlay for drag-and-drop -->
+          <div id="drop-area" ondrop="handleDrop(event)" ondragover="handleDrag(event)">Drop CSV file here</div>
+          <h3>Upload Documents</h3>
+          <p>Drag &amp; drop invoices or financials.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🤖</div>
+          <h3>AI Extracts Data</h3>
+          <p>GPT‑4 parses &amp; validates every field.</p>
+        </div>
+        <div class="card">
+          <div class="icon">✅</div>
+          <h3>Instant Filing</h3>
+          <p>RPA bots submit the forms &amp; store receipts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="demo" class="fade" style="background:#f0f4ff;">
+    <div class="container">
+      <h2>Watch AI Fill a Form</h2>
+      <div class="card" style="max-width:520px; margin:2rem auto;">
+        <input id="companyField" placeholder="Company Name" style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
+        <input id="reportField" placeholder="Report Title" style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
+        <input id="dateField" placeholder="Date" style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
+        <div class="terminal" id="terminal-main"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="actions" class="fade">
+    <div class="container">
+      <h2>AI in Action – Code Demos</h2>
+      <div class="grid-3">
+        <div class="card"><div class="terminal" id="term-extract"></div></div>
+        <div class="card"><div class="terminal" id="term-search"></div></div>
+        <div class="card"><div class="terminal" id="term-submit"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <div class="container">
+      <h2>Architecture Diagram</h2>
+      <div class="diagram">
+        <svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="ah" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+              <polygon points="0 0,10 3.5,0 7" fill="var(--clr-primary)"/>
+            </marker>
+          </defs>
+          <rect x="30" y="80" width="130" height="60" rx="10" class="node"/>
+          <text x="95" y="110" class="node-text">Data Sources</text>
+          <rect x="190" y="30" width="150" height="60" rx="10" class="node"/>
+          <text x="265" y="60" class="node-text">Data Ingest API</text>
+          <rect x="190" y="130" width="150" height="60" rx="10" class="node"/>
+          <text x="265" y="160" class="node-text">Vector DB</text>
+          <rect x="370" y="80" width="160" height="60" rx="10" class="node"/>
+          <text x="450" y="110" class="node-text">GPT‑4 Engine</text>
+          <rect x="570" y="30" width="150" height="60" rx="10" class="node"/>
+          <text x="645" y="60" class="node-text">Validation</text>
+          <rect x="570" y="130" width="150" height="60" rx="10" class="node"/>
+          <text x="645" y="160" class="node-text">RPA Bots</text>
+          <rect x="760" y="80" width="110" height="60" rx="10" class="node"/>
+          <text x="815" y="110" class="node-text">Regulator</text>
+          <line x1="160" y1="110" x2="190" y2="60" class="arrow"/>
+          <line x1="160" y1="110" x2="190" y2="160" class="arrow"/>
+          <line x1="340" y1="60" x2="370" y2="110" class="arrow"/>
+          <line x1="340" y1="160" x2="370" y2="110" class="arrow"/>
+          <line x1="530" y1="110" x2="570" y2="60" class="arrow"/>
+          <line x1="530" y1="110" x2="570" y2="160" class="arrow"/>
+          <line x1="720" y1="60" x2="760" y2="110" class="arrow"/>
+          <line x1="720" y1="160" x2="760" y2="110" class="arrow"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <div class="glass">
+      <h2>Ready to Transform Compliance?</h2>
+      <p>Let’s discuss how AI can streamline your regulatory filings.</p>
+      <a class="btn" href="mailto:contact@telecom-ai.com">Request a Demo</a>
+    </div>
+  </section>
+
+  <!-- Invoice Table & CSV Export -->
+  <section class="fade">
+    <div class="container" style="text-align:center;">
+      <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
+      <a href="/export" class="btn" style="margin-top:1rem; display:inline-block;">Download CSV</a>
+      <div id="invoiceTable" style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invoices %}
+            <tr>
+              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
+              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
+              <td style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
+              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
+              <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
+              <td style="padding:8px; border-bottom:1px solid #eee;">
+                <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
+                <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/edit/{{ inv.id }}">Edit</a>
+                <form method="POST" action="/delete/{{ inv.id }}" onsubmit="return confirm('Are you sure you want to delete this invoice?');" style="display:inline-block;">
+                  <button type="submit" class="btn" style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">Delete</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <footer style="padding:2rem 0; text-align:center; color:#6b7280; font-size:.9rem;">
+    © 2025 AI Compliance Filing
+  </footer>
+
+  <script>
+    // Handle drag-over event
+    function handleDrag(e) {
+      e.preventDefault();
+    }
+    // Handle drop event for CSV files
+    function handleDrop(e) {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (files.length && files[0].type === 'text/csv') {
+        const formData = new FormData();
+        formData.append('csv_file', files[0]);
+        fetch('/', { method: 'POST', body: formData })
+          .then(() => location.reload())
+          .catch(() => alert('Upload failed'));
+      } else {
+        alert('Please drop a valid CSV file.');
+      }
+    }
+    // Toggle visibility of invoice table
+    function toggleInvoices() {
+      const tbl = document.getElementById('invoiceTable');
+      tbl.style.display = tbl.style.display === 'none' ? 'block' : 'none';
+    }
+    // Intersection Observer for fade-in animations
+    document.querySelectorAll('.fade').forEach(el => {
+      const io = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('show');
+            io.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.3 });
+      io.observe(el);
+    });
+    // Typing effect helper
+    function typeInto(el, text, speed = 60, cb) {
+      let i = 0;
+      (function t() {
+        if (i < text.length) {
+          if (el.placeholder) el.placeholder = text.slice(0, i + 1);
+          else el.value += text[i];
+          i++;
+          setTimeout(t, speed);
+        } else if (cb) cb();
+      })();
+    }
+    // Print lines to terminal simulation
+    function printLines(id, lines, delay = 900) {
+      const t = document.getElementById(id);
+      let i = 0;
+      (function n() {
+        if (i < lines.length) {
+          t.innerHTML += lines[i] + '<br>';
+          i++;
+          setTimeout(n, delay);
+        } else {
+          t.innerHTML += '<span class="cursor"></span>';
+        }
+      })();
+    }
+    // Observer helper
+    const obs = (sel, cb) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const io = new IntersectionObserver(e => {
+        if (e[0].isIntersecting) {
+          cb();
+          io.disconnect();
+        }
+      }, { threshold: 0.5 });
+      io.observe(el);
+    };
+    // Demo typing and terminal
+    obs('#demo', () => {
+      const companyField = document.getElementById('companyField');
+      const reportField = document.getElementById('reportField');
+      const dateField = document.getElementById('dateField');
+      typeInto(companyField, 'Acme Corporation', 60, () => {
+        setTimeout(() => typeInto(reportField, 'Q4 Revenue Report'), 300);
+        setTimeout(() => typeInto(dateField, '31 Jan 2025'), 800);
+      });
+      printLines('terminal-main', [
+        '> AI.extractData("report.pdf")',
+        '→ Filling form fields…',
+        '→ Uploading to portal…',
+        '→ Status: ✅ Filed Successfully!'
+      ]);
+    });
+    // Action section terminal prints
+    obs('#actions', () => {
+      printLines('term-extract', [
+        '> AI.parse("invoices.zip")',
+        '→ 124 invoices processed',
+        '→ Data normalized ✅'
+      ]);
+      setTimeout(() => printLines('term-search', [
+        '> AI.vectorSearch("FCC Part 69")',
+        '→ 5 relevant clauses found',
+        '→ Mapping to form fields… ✅'
+      ]), 800);
+      setTimeout(() => printLines('term-submit', [
+        '> AI.RPA.submit("FCC-499A")',
+        '→ Authenticating…',
+        '→ Uploading PDF…',
+        '→ Submission ID: #8842 ✅'
+      ]), 1600);
+    });
+  </script>
+</body>
+</html>
