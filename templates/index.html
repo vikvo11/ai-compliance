@@ -1,10 +1,9 @@
 <!-- 
-Full working example with drag and drop for "Upload Documents" 
-that behaves like "Upload Invoice CSV," but now:
- - The "Show Uploaded Invoices" button is only shown if there are invoices.
- - The invoice list is placed right below the upload section, 
-   not at the very bottom of the page.
-All comments in English. 
+Full working example with drag-and-drop for "Upload Documents"
+that behaves like "Upload Invoice CSV," and now:
+ - The "Show Uploaded Invoices" button (and invoice table) appear right below 
+   the "Upload Documents" card in the same section.
+All comments in English.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -16,7 +15,7 @@ All comments in English.
     /* 
       Drop area overlay for drag-and-drop.
       We use a fixed position overlay that covers the whole page.
-      It's hidden by default and shown via JavaScript when a file is dragged in. 
+      It's hidden by default and shown via JavaScript when a file is dragged in.
     */
     #drop-area {
       display: none; /* hidden by default */
@@ -31,7 +30,7 @@ All comments in English.
       font-weight: bold;
       align-items: center;
       justify-content: center;
-      z-index: 999; 
+      z-index: 999;
     }
 
     /* 
@@ -262,7 +261,7 @@ All comments in English.
 
   <!-- 
     Overlay drop area for drag-and-drop.
-    This is displayed via JavaScript when files are dragged in.
+    Displayed via JavaScript on dragenter, hidden on drop/leave.
   -->
   <div id="drop-area" 
        ondrop="handleDrop(event)" 
@@ -280,10 +279,8 @@ All comments in English.
   <section id="story" class="fade">
     <div class="container">
       <h2>Meet Your AI Compliance Assistant</h2>
-
       <!-- 
-        File upload form (works for manual upload of CSV).
-        We'll reuse the same route for drag-and-drop.
+        File upload form (same route used for drag-and-drop).
       -->
       <form method="POST" enctype="multipart/form-data" style="margin-top:2rem; text-align:center;">
         <label style="display:block; margin-bottom:0.5rem; font-weight:600;">Upload Invoice CSV:</label>
@@ -293,7 +290,7 @@ All comments in English.
         <button type="submit" class="btn">Upload</button>
       </form>
 
-      <!-- Flash message (for success/error) -->
+      <!-- Flash message (e.g. success/error) -->
       {% with messages = get_flashed_messages() %}
         {% if messages %}
           <div style="margin-top:1rem; color:green; font-weight:600;">
@@ -303,67 +300,75 @@ All comments in English.
       {% endwith %}
 
       <!-- 
-        Only show the "Show Uploaded Invoices" button if we actually have invoices.
-        Also put the invoice table here, so it won't be at the bottom of the page.
+        3-card layout. The first card is "Upload Documents."
+        We place the "Show Uploaded Invoices" button + table directly below
+        the Upload Documents card, if there are any invoices.
       -->
-      {% if invoices|length > 0 %}
-        <div style="text-align:center; margin:2rem auto;">
-          <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
-          <a href="/export" class="btn" style="margin-left:1rem;">Download CSV</a>
-        </div>
-        <div id="invoiceTable" 
-             style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
-          <table style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr>
-                <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
-                <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
-                <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
-                <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
-                <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
-                <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for inv in invoices %}
-              <tr>
-                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
-                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
-                <td style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
-                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
-                <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
-                <td style="padding:8px; border-bottom:1px solid #eee;">
-                  <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
-                  <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/edit/{{ inv.id }}">Edit</a>
-                  <form method="POST" 
-                        action="/delete/{{ inv.id }}" 
-                        onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
-                        style="display:inline-block;">
-                    <button type="submit" class="btn" 
-                            style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
-                      Delete
-                    </button>
-                  </form>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% endif %}
-
-      <!-- Feature cards -->
       <div class="grid-3" style="margin-top:3rem;">
+        <!-- Upload Documents card -->
         <div class="card">
           <div class="icon">📄</div>
           <h3>Upload Documents</h3>
           <p>Drag &amp; drop invoices or financials.</p>
+          <!-- 
+            If there are invoices, show the button & table right here
+            under the card. 
+          -->
+          {% if invoices|length > 0 %}
+            <div style="text-align:center; margin-top:2rem;">
+              <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
+              <a href="/export" class="btn" style="margin-left:1rem;">Download CSV</a>
+            </div>
+            <div id="invoiceTable" 
+                 style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
+              <table style="width:100%; border-collapse:collapse;">
+                <thead>
+                  <tr>
+                    <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
+                    <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
+                    <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
+                    <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
+                    <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
+                    <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for inv in invoices %}
+                  <tr>
+                    <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
+                    <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
+                    <td style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
+                    <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
+                    <td style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
+                    <td style="padding:8px; border-bottom:1px solid #eee;">
+                      <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/export/{{ inv.id }}">Download</a>
+                      <a class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;" href="/edit/{{ inv.id }}">Edit</a>
+                      <form method="POST" 
+                            action="/delete/{{ inv.id }}" 
+                            onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
+                            style="display:inline-block;">
+                        <button type="submit" class="btn" 
+                                style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
+                          Delete
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
         </div>
+        
+        <!-- AI Extracts Data card -->
         <div class="card">
           <div class="icon">🤖</div>
           <h3>AI Extracts Data</h3>
           <p>GPT‑4 parses &amp; validates every field.</p>
         </div>
+
+        <!-- Instant Filing card -->
         <div class="card">
           <div class="icon">✅</div>
           <h3>Instant Filing</h3>
@@ -373,6 +378,7 @@ All comments in English.
     </div>
   </section>
 
+  <!-- Demonstration Section -->
   <section id="demo" class="fade" style="background:#f0f4ff;">
     <div class="container">
       <h2>Watch AI Fill a Form</h2>
@@ -388,6 +394,7 @@ All comments in English.
     </div>
   </section>
 
+  <!-- "AI in Action" Code Demo Section -->
   <section id="actions" class="fade">
     <div class="container">
       <h2>AI in Action – Code Demos</h2>
@@ -405,6 +412,7 @@ All comments in English.
     </div>
   </section>
 
+  <!-- Architecture Diagram -->
   <section class="fade">
     <div class="container">
       <h2>Architecture Diagram</h2>
@@ -450,6 +458,7 @@ All comments in English.
     </div>
   </section>
 
+  <!-- CTA Section -->
   <section class="fade">
     <div class="glass">
       <h2>Ready to Transform Compliance?</h2>
@@ -483,11 +492,10 @@ All comments in English.
       }
     }
 
-    // If the user drags a file into the browser window
+    // Listen for dragenter to show overlay if a file is actually dragged
     document.addEventListener('dragenter', (e) => {
       e.preventDefault();
       dragCounter++;
-      // Show the overlay only if we have a file being dragged
       document.getElementById('drop-area').style.display = 'flex';
     });
 
@@ -512,7 +520,7 @@ All comments in English.
           if (!resp.ok) {
             throw new Error('Upload failed');
           }
-          // Reload page to show the newly uploaded invoice
+          // Reload page to show newly uploaded invoice
           location.reload();
         })
         .catch(() => alert('Upload failed'));
