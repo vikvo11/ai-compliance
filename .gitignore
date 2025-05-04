@@ -1,0 +1,14 @@
+# Ignore Python artifacts
+__pycache__/
+*.py[cod]
+
+# Environment files
+.env
+
+# SQLite database
+*.db
+
+# Local data and temp directories
+data/
+tmp/
+tmp/**

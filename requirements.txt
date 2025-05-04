@@ -1,2 +1,4 @@
 Flask==2.2.5
 gunicorn
+flask_sqlalchemy
+pandas

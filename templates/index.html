@@ -1,154 +1,799 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>AI‑Powered Compliance Filing</title>
-<style>
-/* ===== Base ===== */
-*{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f9fafb;color:#1f2937;line-height:1.6;overflow-x:hidden}
-:root{
-  --clr-primary:#2563eb;
-  --clr-primary-dark:#1e3a8a;
-  --clr-secondary:#facc15;
-}
-h1,h2,h3{color:#0f172a;line-height:1.2;margin-bottom:.75rem}
-h1{font-size:2.7rem}
-h2{font-size:2rem;text-align:center}
-h3{font-size:1.25rem}
-p{margin-bottom:1rem}
-.container{max-width:1100px;padding:0 1rem;margin:auto}
-.btn{display:inline-block;padding:.8rem 1.6rem;border-radius:10px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));text-decoration:none;transition:transform .3s,box-shadow .3s}
-.btn:hover{transform:translateY(-4px);box-shadow:0 10px 25px rgba(0,0,0,.15)}
-/* ===== Hero ===== */
-header{background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));color:#fff;padding:5rem 1rem;text-align:center}
-header h1{font-size:3rem;margin-bottom:1rem}
-header p{font-size:1.125rem;margin-bottom:2rem}
-/* ===== Sections ===== */
-section{padding:4rem 0}
-.grid-3{display:grid;gap:2rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-.card{background:#fff;border-radius:16px;padding:2rem;box-shadow:0 4px 18px rgba(0,0,0,.05);transition:transform .3s,box-shadow .3s;cursor:pointer;position:relative;overflow:hidden}
-.card:hover{transform:translateY(-8px) scale(1.03);box-shadow:0 12px 30px rgba(0,0,0,.12)}
-.icon{font-size:2.7rem;margin-bottom:1rem;transition:transform .5s}
-.card:hover .icon{transform:rotate(10deg) scale(1.1)}
-.card::before{content:"";position:absolute;bottom:0;left:50%;width:0;height:4px;background:var(--clr-secondary);transition:width .3s,left .3s}
-.card:hover::before{width:60%;left:20%}
-/* ===== Terminal ===== */
-.terminal{background:#0f172a;color:#d1fae5;border-radius:12px;padding:1rem;font-family:monospace;font-size:.9rem;line-height:1.4;min-height:110px}
-.cursor{display:inline-block;width:8px;background:#d1fae5;margin-left:2px;animation:blink 1s steps(2,start) infinite}
-@keyframes blink{to{background:transparent}}
-/* ===== Diagram ===== */
-.diagram{display:flex;justify-content:center;margin-top:2rem}
-svg{max-width:820px;width:100%}
-.node{fill:#fff;stroke:#cbd5e1;stroke-width:2}
-.node-text{font-family:inherit;font-size:14px;fill:#0f172a;font-weight:600;text-anchor:middle;dominant-baseline:middle}
-.arrow{stroke:var(--clr-primary);stroke-width:2;marker-end:url(#ah)}
-/* ===== CTA ===== */
-.glass{background:rgba(255,255,255,.15);backdrop-filter:blur(45px);border-radius:16px;padding:3rem;text-align:center;margin:auto;max-width:800px}
-/* ===== Fade animation ===== */
-.fade{opacity:0;transform:translateY(40px);transition:opacity .8s ease,transform .8s ease}
-.fade.show{opacity:1;transform:none}
-/* === Responsive === */
-@media(max-width:768px){h1{font-size:2rem}h2{font-size:1.6rem}}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI‑Powered Compliance Filing</title>
+  <style>
+    /*
+      Drop area overlay for drag-and-drop.
+      We use a fixed position overlay that covers the whole page.
+      It's hidden by default and shown via JavaScript when a file is dragged in.
+    */
+    #drop-area {
+      display: none; /* hidden by default */
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      font-size: 1.5rem;
+      font-weight: bold;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+
+    /* 
+      Toast container for showing messages at the bottom-right corner.
+    */
+    #toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 9999;
+    }
+    /* 
+      Toast appearance: green background, white text, some padding. 
+      Fading out is handled by JavaScript (or you can do a CSS animation).
+    */
+    .toast {
+      background: #22c55e; /* Tailwind's green-500 */
+      color: #fff;
+      padding: 0.8rem 1rem;
+      border-radius: 8px;
+      font-weight: 600;
+      min-width: 200px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      transition: opacity 0.8s ease;
+      opacity: 1;
+    }
+
+    /* 
+      Base page styles 
+    */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html {
+      scroll-behavior: smooth;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #f9fafb;
+      color: #1f2937;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    :root {
+      --clr-primary: #2563eb;
+      --clr-primary-dark: #1e3a8a;
+      --clr-secondary: #facc15;
+    }
+    h1, h2, h3 {
+      color: #0f172a;
+      line-height: 1.2;
+      margin-bottom: .75rem;
+    }
+    h1 {
+      font-size: 2.7rem;
+    }
+    h2 {
+      font-size: 2rem;
+      text-align: center;
+    }
+    h3 {
+      font-size: 1.25rem;
+    }
+    p {
+      margin-bottom: 1rem;
+    }
+    .container {
+      max-width: 1100px;
+      padding: 0 1rem;
+      margin: auto;
+    }
+    .btn {
+      display: inline-block;
+      padding: .8rem 1.6rem;
+      border-radius: 10px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, var(--clr-primary-dark), var(--clr-primary));
+      text-decoration: none;
+      transition: transform .3s, box-shadow .3s;
+      cursor: pointer;
+    }
+    .btn:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 10px 25px rgba(0,0,0,.15);
+    }
+
+    /*
+      Hero Section
+    */
+    header {
+      background: linear-gradient(135deg, var(--clr-primary-dark), var(--clr-primary));
+      color: #fff;
+      padding: 5rem 1rem;
+      text-align: center;
+    }
+    header h1 {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    header p {
+      font-size: 1.125rem;
+      margin-bottom: 2rem;
+    }
+
+    /*
+      Content Sections
+    */
+    section {
+      padding: 4rem 0;
+    }
+    .grid-3 {
+      display: grid;
+      gap: 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 4px 18px rgba(0,0,0,.05);
+      transition: transform .3s, box-shadow .3s;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    .card:hover {
+      transform: translateY(-8px) scale(1.03);
+      box-shadow: 0 12px 30px rgba(0,0,0,.12);
+    }
+    .icon {
+      font-size: 2.7rem;
+      margin-bottom: 1rem;
+      transition: transform .5s;
+    }
+    .card:hover .icon {
+      transform: rotate(10deg) scale(1.1);
+    }
+    .card::before {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      width: 0;
+      height: 4px;
+      background: var(--clr-secondary);
+      transition: width .3s, left .3s;
+    }
+    .card:hover::before {
+      width: 60%;
+      left: 20%;
+    }
+
+    /*
+      Terminal Styles
+    */
+    .terminal {
+      background: #0f172a;
+      color: #d1fae5;
+      border-radius: 12px;
+      padding: 1rem;
+      font-family: monospace;
+      font-size: .9rem;
+      line-height: 1.4;
+      min-height: 110px;
+    }
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      background: #d1fae5;
+      margin-left: 2px;
+      animation: blink 1s steps(2, start) infinite;
+    }
+    @keyframes blink {
+      to {
+        background: transparent;
+      }
+    }
+
+    /*
+      Diagram 
+    */
+    .diagram {
+      display: flex;
+      justify-content: center;
+      margin-top: 2rem;
+    }
+    svg {
+      max-width: 820px;
+      width: 100%;
+    }
+    .node {
+      fill: #fff;
+      stroke: #cbd5e1;
+      stroke-width: 2;
+    }
+    .node-text {
+      font-family: inherit;
+      font-size: 14px;
+      fill: #0f172a;
+      font-weight: 600;
+      text-anchor: middle;
+      dominant-baseline: middle;
+    }
+    .arrow {
+      stroke: var(--clr-primary);
+      stroke-width: 2;
+      marker-end: url(#ah);
+    }
+
+    /*
+      Glass CTA 
+    */
+    .glass {
+      background: rgba(255,255,255,.15);
+      backdrop-filter: blur(45px);
+      border-radius: 16px;
+      padding: 3rem;
+      text-align: center;
+      margin: auto;
+      max-width: 800px;
+    }
+
+    /*
+      Fade-in Animation
+    */
+    .fade {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity .8s ease, transform .8s ease;
+    }
+    .fade.show {
+      opacity: 1;
+      transform: none;
+    }
+
+    /*
+      Responsive 
+    */
+    @media (max-width: 768px) {
+      h1 {
+        font-size: 2rem;
+      }
+      h2 {
+        font-size: 1.6rem;
+      }
+    }
+  </style>
 </head>
 <body>
-<header>
-  <h1>AI‑Powered Compliance Filing</h1>
-  <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
-  <a href="#story" class="btn">See How It Works</a>
-</header>
 
-<section id="story" class="fade">
- <div class="container">
-  <h2>Meet Your AI Compliance Assistant</h2>
-  <div class="grid-3">
-    <div class="card"><div class="icon">📄</div><h3>Upload Documents</h3><p>Drag &amp; drop invoices or financials.</p></div>
-    <div class="card"><div class="icon">🤖</div><h3>AI Extracts Data</h3><p>GPT‑4 parses &amp; validates every field.</p></div>
-    <div class="card"><div class="icon">✅</div><h3>Instant Filing</h3><p>RPA bots submit the forms &amp; store receipts.</p></div>
+  <!-- Toast container (for bottom-right ephemeral messages) -->
+  <div id="toast-container"></div>
+
+  <!-- 
+    Overlay drop area for drag-and-drop.
+    Displayed via JavaScript on dragenter, hidden on drop/leave.
+  -->
+  <div id="drop-area" 
+       ondrop="handleDrop(event)" 
+       ondragover="handleDragOver(event)" 
+       ondragleave="handleDragLeave(event)">
+    Drop CSV file here
   </div>
- </div>
-</section>
 
-<section id="demo" class="fade" style="background:#f0f4ff">
- <div class="container">
-  <h2>Watch AI Fill a Form</h2>
-  <div class="card" style="max-width:520px;margin:2rem auto">
-    <input id="companyField" placeholder="Company Name" style="width:100%;padding:.9rem;border:1px solid #d1d5db;border-radius:8px;margin-bottom:.6rem" readonly>
-    <input id="reportField" placeholder="Report Title" style="width:100%;padding:.9rem;border:1px solid #d1d5db;border-radius:8px;margin-bottom:.6rem" readonly>
-    <input id="dateField" placeholder="Date" style="width:100%;padding:.9rem;border:1px solid #d1d5db;border-radius:8px;margin-bottom:.6rem" readonly>
-    <div class="terminal" id="terminal-main"></div>
-  </div>
- </div>
-</section>
+  <header>
+    <h1>AI‑Powered Compliance Filing</h1>
+    <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
+    <a href="#story" class="btn">See How It Works</a>
+  </header>
 
-<section id="actions" class="fade">
- <div class="container">
-  <h2>AI in Action – Code Demos</h2>
-  <div class="grid-3">
-    <div class="card"><div class="terminal" id="term-extract"></div></div>
-    <div class="card"><div class="terminal" id="term-search"></div></div>
-    <div class="card"><div class="terminal" id="term-submit"></div></div>
-  </div>
- </div>
-</section>
+  <section id="story" class="fade">
+    <div class="container">
+      <h2>Meet Your AI Compliance Assistant</h2>
+      
+      <!-- Hide the "Upload Invoice CSV" form by using a wrapper with display:none -->
+      <div style="display:none;">
+        <form method="POST" enctype="multipart/form-data" style="margin-top:2rem; text-align:center;">
+          <label style="display:block; margin-bottom:0.5rem; font-weight:600;">Upload Invoice CSV:</label>
+          <input type="file" name="csv_file" accept=".csv" required 
+                 style="margin-bottom:1rem; padding:.5rem; border-radius:6px; border:1px solid #ccc;">
+          <br>
+          <button type="submit" class="btn">Upload</button>
+        </form>
+      </div>
 
-<section class="fade">
- <div class="container">
-  <h2>Architecture Diagram</h2>
-  <div class="diagram">
-   <svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg">
-    <defs><marker id="ah" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="var(--clr-primary)"/></marker></defs>
-    <rect x="30" y="80" width="130" height="60" rx="10" class="node"/><text x="95" y="110" class="node-text">Data Sources</text>
-    <rect x="190" y="30" width="150" height="60" rx="10" class="node"/><text x="265" y="60" class="node-text">Data Ingest API</text>
-    <rect x="190" y="130" width="150" height="60" rx="10" class="node"/><text x="265" y="160" class="node-text">Vector DB</text>
-    <rect x="370" y="80" width="160" height="60" rx="10" class="node"/><text x="450" y="110" class="node-text">GPT‑4 Engine</text>
-    <rect x="570" y="30" width="150" height="60" rx="10" class="node"/><text x="645" y="60" class="node-text">Validation</text>
-    <rect x="570" y="130" width="150" height="60" rx="10" class="node"/><text x="645" y="160" class="node-text">RPA Bots</text>
-    <rect x="760" y="80" width="110" height="60" rx="10" class="node"/><text x="815" y="110" class="node-text">Regulator</text>
-    <line x1="160" y1="110" x2="190" y2="60" class="arrow"/><line x1="160" y1="110" x2="190" y2="160" class="arrow"/>
-    <line x1="340" y1="60" x2="370" y2="110" class="arrow"/><line x1="340" y1="160" x2="370" y2="110" class="arrow"/>
-    <line x1="530" y1="110" x2="570" y2="60" class="arrow"/><line x1="530" y1="110" x2="570" y2="160" class="arrow"/>
-    <line x1="720" y1="60" x2="760" y2="110" class="arrow"/><line x1="720" y1="160" x2="760" y2="110" class="arrow"/>
-   </svg>
-  </div>
- </div>
-</section>
+      <!-- 
+        Display flash messages: if there's more than one, loop over them 
+        (handles messages like "Invoice updated successfully", "Invoice deleted", etc.)
+        Kept here as a fallback if you also want server-side messages (optional).
+      -->
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          {% for msg in messages %}
+            <div style="margin-top:1rem; color:green; font-weight:600;">
+              {{ msg }}
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
 
-<section class="fade">
- <div class="glass">
-  <h2>Ready to Transform Compliance?</h2>
-  <p>Let’s discuss how AI can streamline your regulatory filings.</p>
-  <a class="btn" href="mailto:contact@telecom-ai.com">Request a Demo</a>
- </div>
-</section>
+      <!-- 
+        3-card layout. The first card is "Upload Documents."
+        The "Show Uploaded Invoices" button remains here, 
+        but the invoice table will be in a separate section below.
+      -->
+      <div class="grid-3" style="margin-top:3rem;">
+        <!-- Upload Documents card -->
+        <div class="card">
+          <div class="icon">📄</div>
+          <h3>Upload Documents</h3>
+          <p>Drag &amp; drop invoices or financials.</p>
+          {% if invoices|length > 0 %}
+            <div style="text-align:center; margin-top:2rem;">
+              <!-- Keep the Show Uploaded Invoices button in the same spot -->
+              <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
+            </div>
+          {% endif %}
+        </div>
+        
+        <!-- AI Extracts Data card -->
+        <div class="card">
+          <div class="icon">🤖</div>
+          <h3>AI Extracts Data</h3>
+          <p>GPT‑4 parses &amp; validates every field.</p>
+        </div>
 
-<footer style="padding:2rem 0;text-align:center;color:#6b7280;font-size:.9rem">© 2025 AI Compliance Filing</footer>
+        <!-- Instant Filing card -->
+        <div class="card">
+          <div class="icon">✅</div>
+          <h3>Instant Filing</h3>
+          <p>RPA bots submit the forms &amp; store receipts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-<script>
-document.querySelectorAll('.fade').forEach(el=>{
-  const io=new IntersectionObserver(e=>{
-    e.forEach(ent=>{if(ent.isIntersecting){ent.target.classList.add('show');io.unobserve(ent.target);}});
-  },{threshold:.3});
-  io.observe(el);
-});
-function typeInto(el,text,s=60,cb){let i=0;(function t(){if(i<text.length){el.placeholder?el.placeholder=text.slice(0,i+1):el.value+=text[i];i++;setTimeout(t,s);}else if(cb)cb();})();}
-function printLines(id,lines,delay=900){const t=document.getElementById(id);let i=0;(function n(){if(i<lines.length){t.innerHTML+=lines[i]+'<br>';i++;setTimeout(n,delay);}else t.innerHTML+='<span class="cursor"></span>';})();}
-const obs=(sel,cb)=>{const el=document.querySelector(sel);if(!el)return;const io=new IntersectionObserver(e=>{if(e[0].isIntersecting){cb();io.disconnect();}},{threshold:.5});io.observe(el);};
-obs('#demo',()=>{
-  typeInto(document.getElementById('companyField'),'Acme Corporation',60,()=>{
-    setTimeout(()=>typeInto(document.getElementById('reportField'),'Q4 Revenue Report'),300);
-    setTimeout(()=>typeInto(document.getElementById('dateField'),'31 Jan 2025'),800);
-  });
-  printLines('terminal-main',['> AI.extractData("report.pdf")','→ Filling form fields…','→ Uploading to portal…','→ Status: ✅ Filed Successfully!']);
-});
-obs('#actions',()=>{
-  printLines('term-extract',['> AI.parse("invoices.zip")','→ 124 invoices processed','→ Data normalized ✅']);
-  setTimeout(()=>printLines('term-search',['> AI.vectorSearch("FCC Part 69")','→ 5 relevant clauses found','→ Mapping to form fields… ✅']),800);
-  setTimeout(()=>printLines('term-submit',['> AI.RPA.submit("FCC-499A")','→ Authenticating…','→ Uploading PDF…','→ Submission ID: #8842 ✅']),1600);
-});
-</script>
+  <!-- 
+    New Section for Invoices (table + Download CSV button)
+    Only rendered if invoices exist.
+  -->
+  {% if invoices|length > 0 %}
+  <section id="invoices" class="fade">
+    <div class="container" style="margin-top:0; text-align:center;">
+      <!-- The invoice table is hidden by default (toggled by the button) -->
+      <div id="invoiceTable" 
+           style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
+              <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invoices %}
+            <!-- 
+              Each row has unique IDs so we can update them after saving. 
+              Example: "invoice-{{inv.id}}-client", "invoice-{{inv.id}}-amount", etc.
+            -->
+            <tr>
+              <td id="invoice-{{ inv.id }}-client" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
+              <td id="invoice-{{ inv.id }}-invoiceID" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
+              <td id="invoice-{{ inv.id }}-amount" style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
+              <td id="invoice-{{ inv.id }}-due" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
+              <td id="invoice-{{ inv.id }}-status" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
+              <td style="padding:8px; border-bottom:1px solid #eee;">
+                <a class="btn" 
+                   style="padding:0.3rem 1rem; font-size:0.8rem;" 
+                   href="/export/{{ inv.id }}">
+                  Download
+                </a>
+                <div style="display:inline-block; margin-right:6px;">
+                  <button type="button" class="btn" 
+                          onclick="toggleEdit({{ inv.id }})" 
+                          style="padding:0.3rem 1rem; font-size:0.8rem;">
+                    Edit
+                  </button>
+                </div>
+                <form method="POST" 
+                      action="/delete/{{ inv.id }}" 
+                      onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
+                      style="display:inline-block;">
+                  <button type="submit" class="btn" 
+                          style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
+                    Delete
+                  </button>
+                </form>
+              </td>
+            </tr>
+            <!-- 
+              "Edit" row uses an onsubmit handler that prevents page reload. 
+              We do fetch to /edit/{{inv.id}} returning JSON. 
+              Then we update the row with new data. 
+            -->
+            <tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
+              <td colspan="6">
+                <form onsubmit="saveInvoice(event, {{ inv.id }})" 
+                      style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                  <input type="email" name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
+                  <input type="number" name="amount" step="0.01" value="{{ inv.amount }}" placeholder="Amount">
+                  <input type="text" name="date_due" value="{{ inv.date_due }}" placeholder="Due Date">
+                  <select name="status">
+                    <option value="unpaid" {% if inv.status == 'unpaid' %}selected{% endif %}>Unpaid</option>
+                    <option value="paid" {% if inv.status == 'paid' %}selected{% endif %}>Paid</option>
+                  </select>
+                  <button class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;">Save</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div style="margin-top:0.5rem; padding-left:8px; text-align:left;">
+          <a href="/export" class="btn" style="font-size:0.75rem; padding:0.4rem 1rem;">Download CSV</a>
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- Demonstration Section -->
+  <section id="demo" class="fade" style="background:#f0f4ff;">
+    <div class="container">
+      <h2>Watch AI Fill a Form</h2>
+      <div class="card" style="max-width:520px; margin:2rem auto;">
+        <input id="companyField" placeholder="Company Name" 
+               style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
+        <input id="reportField" placeholder="Report Title" 
+               style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
+        <input id="dateField" placeholder="Date" 
+               style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
+        <div class="terminal" id="terminal-main"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- "AI in Action" Code Demo Section -->
+  <section id="actions" class="fade">
+    <div class="container">
+      <h2>AI in Action – Code Demos</h2>
+      <div class="grid-3">
+        <div class="card">
+          <div class="terminal" id="term-extract"></div>
+        </div>
+        <div class="card">
+          <div class="terminal" id="term-search"></div>
+        </div>
+        <div class="card">
+          <div class="terminal" id="term-submit"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Diagram -->
+  <section class="fade">
+    <div class="container">
+      <h2>Architecture Diagram</h2>
+      <div class="diagram">
+        <svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="ah" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+              <polygon points="0 0,10 3.5,0 7" fill="var(--clr-primary)"/>
+            </marker>
+          </defs>
+
+          <rect x="30" y="80" width="130" height="60" rx="10" class="node"/>
+          <text x="95" y="110" class="node-text">Data Sources</text>
+
+          <rect x="190" y="30" width="150" height="60" rx="10" class="node"/>
+          <text x="265" y="60" class="node-text">Data Ingest API</text>
+
+          <rect x="190" y="130" width="150" height="60" rx="10" class="node"/>
+          <text x="265" y="160" class="node-text">Vector DB</text>
+
+          <rect x="370" y="80" width="160" height="60" rx="10" class="node"/>
+          <text x="450" y="110" class="node-text">GPT‑4 Engine</text>
+
+          <rect x="570" y="30" width="150" height="60" rx="10" class="node"/>
+          <text x="645" y="60" class="node-text">Validation</text>
+
+          <rect x="570" y="130" width="150" height="60" rx="10" class="node"/>
+          <text x="645" y="160" class="node-text">RPA Bots</text>
+
+          <rect x="760" y="80" width="110" height="60" rx="10" class="node"/>
+          <text x="815" y="110" class="node-text">Regulator</text>
+
+          <line x1="160" y1="110" x2="190" y2="60" class="arrow"/>
+          <line x1="160" y1="110" x2="190" y2="160" class="arrow"/>
+          <line x1="340" y1="60" x2="370" y2="110" class="arrow"/>
+          <line x1="340" y1="160" x2="370" y2="110" class="arrow"/>
+          <line x1="530" y1="110" x2="570" y2="60" class="arrow"/>
+          <line x1="530" y1="110" x2="570" y2="160" class="arrow"/>
+          <line x1="720" y1="60" x2="760" y2="110" class="arrow"/>
+          <line x1="720" y1="160" x2="760" y2="110" class="arrow"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="fade">
+    <div class="glass">
+      <h2>Ready to Transform Compliance?</h2>
+      <p>Let’s discuss how AI can streamline your regulatory filings.</p>
+      <a class="btn" href="mailto:contact@telecom-ai.com">Request a Demo</a>
+    </div>
+  </section>
+
+  <footer style="padding:2rem 0; text-align:center; color:#6b7280; font-size:.9rem;">
+    © 2025 AI Compliance Filing
+  </footer>
+
+  <script>
+    /*
+      This code manages the drag-and-drop functionality.
+      We post to the same route as the "Upload Invoice CSV" form ("/").
+    */
+    let dragCounter = 0;
+
+    // Handle drag over
+    function handleDragOver(e) {
+      e.preventDefault();
+    }
+
+    // Handle drag leave
+    function handleDragLeave(e) {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter === 0) {
+        document.getElementById('drop-area').style.display = 'none';
+      }
+    }
+
+    // Listen for dragenter to show overlay if a file is actually dragged
+    document.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      document.getElementById('drop-area').style.display = 'flex';
+    });
+
+    // Handle drop event (upload file)
+    function handleDrop(e) {
+      e.preventDefault();
+      dragCounter = 0;
+      document.getElementById('drop-area').style.display = 'none';
+
+      const files = e.dataTransfer.files;
+      if (files.length && files[0].type === 'text/csv') {
+        // We'll send the file to the same route as the form
+        const formData = new FormData();
+        formData.append('csv_file', files[0]);
+
+        // POST to root ("/") – same as the form
+        fetch('/', {
+          method: 'POST',
+          body: formData
+        })
+        .then((resp) => {
+          if (!resp.ok) {
+            throw new Error('Upload failed');
+          }
+          // Reload page to show newly uploaded invoice
+          location.reload();
+        })
+        .catch(() => alert('Upload failed'));
+      } else {
+        alert('Please drop a valid CSV file.');
+      }
+    }
+
+    // Toggle visibility of the invoice table
+    function toggleInvoices() {
+      const tbl = document.getElementById('invoiceTable');
+      tbl.style.display = (tbl.style.display === 'none') ? 'block' : 'none';
+    }
+
+    // Intersection Observer for fade-in animations
+    document.querySelectorAll('.fade').forEach(el => {
+      const io = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('show');
+            io.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.3 });
+      io.observe(el);
+    });
+
+    /*
+      Helper to show a "toast" message at the bottom-right.
+      Automatically fades out after 3 seconds.
+    */
+    function showToast(message) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.classList.add('toast');
+      toast.textContent = message;
+      container.appendChild(toast);
+
+      // Fade out and remove after 3 seconds
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => container.removeChild(toast), 800);
+      }, 3000);
+    }
+
+    /*
+      This prevents the normal form submission for editing an invoice.
+      We do an AJAX call to /edit/<id> and expect JSON response:
+        {
+          "client_name": "...",
+          "invoice_id": "...",
+          "amount": 123.45,
+          "date_due": "YYYY-MM-DD",
+          "status": "paid" 
+        }
+      Then we update that row in the table and show a toast at the bottom.
+    */
+    async function saveInvoice(event, invoiceId) {
+      event.preventDefault(); // No page reload
+      try {
+        const form = event.target;
+        const formData = new FormData(form);
+
+        const response = await fetch(`/edit/${invoiceId}`, {
+          method: 'POST',
+          body: formData
+        });
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+        const data = await response.json();
+
+        // Update the table row with new data:
+        document.getElementById(`invoice-${invoiceId}-client`).textContent = data.client_name;
+        document.getElementById(`invoice-${invoiceId}-invoiceID`).textContent = data.invoice_id;
+        document.getElementById(`invoice-${invoiceId}-amount`).textContent = `$${parseFloat(data.amount).toFixed(2)}`;
+        document.getElementById(`invoice-${invoiceId}-due`).textContent = data.date_due;
+        document.getElementById(`invoice-${invoiceId}-status`).textContent = data.status;
+
+        // Hide the edit row
+        document.getElementById(`edit-row-${invoiceId}`).style.display = 'none';
+
+        // Show success toast
+        showToast('Invoice updated successfully!');
+      } catch (err) {
+        console.error(err);
+        showToast('Error updating invoice.');
+      }
+    }
+
+    /*
+      Typing effect helper:
+      Writes text character by character into placeholders or values
+    */
+    function typeInto(el, text, speed = 60, cb) {
+      let i = 0;
+      (function t() {
+        if (i < text.length) {
+          if (el.placeholder) {
+            el.placeholder = text.slice(0, i + 1);
+          } else {
+            el.value += text[i];
+          }
+          i++;
+          setTimeout(t, speed);
+        } else if (cb) {
+          cb();
+        }
+      })();
+    }
+
+    /*
+      Print lines to a pseudo-terminal div
+    */
+    function printLines(id, lines, delay = 900) {
+      const t = document.getElementById(id);
+      let i = 0;
+      (function n() {
+        if (i < lines.length) {
+          t.innerHTML += lines[i] + '<br>';
+          i++;
+          setTimeout(n, delay);
+        } else {
+          t.innerHTML += '<span class="cursor"></span>';
+        }
+      })();
+    }
+
+    /*
+      Helper to run once a section is on screen
+    */
+    const obs = (sel, cb) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const io = new IntersectionObserver(e => {
+        if (e[0].isIntersecting) {
+          cb();
+          io.disconnect();
+        }
+      }, { threshold: 0.5 });
+      io.observe(el);
+    };
+
+    /*
+      Populate the "Watch AI Fill a Form" demo when it becomes visible
+    */
+    obs('#demo', () => {
+      const companyField = document.getElementById('companyField');
+      const reportField = document.getElementById('reportField');
+      const dateField = document.getElementById('dateField');
+
+      // Type into the placeholders
+      typeInto(companyField, 'Acme Corporation', 60, () => {
+        setTimeout(() => typeInto(reportField, 'Q4 Revenue Report'), 300);
+        setTimeout(() => typeInto(dateField, '31 Jan 2025'), 800);
+      });
+
+      // Print lines in the main terminal
+      printLines('terminal-main', [
+        '> AI.extractData("report.pdf")',
+        '→ Filling form fields…',
+        '→ Uploading to portal…',
+        '→ Status: ✅ Filed Successfully!'
+      ]);
+    });
+
+    /*
+      Demo lines for "AI in Action" terminal windows
+    */
+    obs('#actions', () => {
+      printLines('term-extract', [
+        '> AI.parse("invoices.zip")',
+        '→ 124 invoices processed',
+        '→ Data normalized ✅'
+      ]);
+      setTimeout(() => printLines('term-search', [
+        '> AI.vectorSearch("FCC Part 69")',
+        '→ 5 relevant clauses found',
+        '→ Mapping to form fields… ✅'
+      ]), 800);
+      setTimeout(() => printLines('term-submit', [
+        '> AI.RPA.submit("FCC-499A")',
+        '→ Authenticating…',
+        '→ Uploading PDF…',
+        '→ Submission ID: #8842 ✅'
+      ]), 1600);
+    });
+
+    /*
+      Toggles the edit form row for a particular invoice.
+      Shows/hides the row with 'edit-row-{id}'.
+    */
+    function toggleEdit(id) {
+      const row = document.getElementById(`edit-row-${id}`);
+      row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
+    }
+  </script>
+
 </body>
 </html>
