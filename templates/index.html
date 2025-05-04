@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI‑Powered Compliance Filing</title>
+  <title>‑Powered Compliance Filing</title>
   <style>
     /*
       Drop area overlay for drag-and-drop.
@@ -299,14 +299,14 @@
   </div>
 
   <header>
-    <h1>AI‑Powered Compliance Filing</h1>
+    <h1>‑Powered Compliance Filing</h1>
     <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
     <a href="#story" class="btn">See How It Works</a>
   </header>
 
   <section id="story" class="fade">
     <div class="container">
-      <h2>Meet Your AI Compliance Assistant</h2>
+      <h2>Meet Your  Compliance Assistant</h2>
       
       <!-- Hide the "Upload Invoice CSV" form by using a wrapper with display:none -->
       <div style="display:none;">
@@ -353,10 +353,10 @@
           {% endif %}
         </div>
         
-        <!-- AI Extracts Data card -->
+        <!--  Extracts Data card -->
         <div class="card">
           <div class="icon">🤖</div>
-          <h3>AI Extracts Data</h3>
+          <h3> Extracts Data</h3>
           <p>GPT‑4 parses &amp; validates every field.</p>
         </div>
 
@@ -461,7 +461,7 @@
   <!-- Demonstration Section -->
   <section id="demo" class="fade" style="background:#f0f4ff;">
     <div class="container">
-      <h2>Watch AI Fill a Form</h2>
+      <h2>Watch  Fill a Form</h2>
       <div class="card" style="max-width:520px; margin:2rem auto;">
         <input id="companyField" placeholder="Company Name" 
                style="width:100%; padding:.9rem; border:1px solid #d1d5db; border-radius:8px; margin-bottom:.6rem;" readonly>
@@ -474,10 +474,10 @@
     </div>
   </section>
 
-  <!-- "AI in Action" Code Demo Section -->
+  <!-- " in Action" Code Demo Section -->
   <section id="actions" class="fade">
     <div class="container">
-      <h2>AI in Action – Code Demos</h2>
+      <h2> in Action  Code Demos</h2>
       <div class="grid-3">
         <div class="card">
           <div class="terminal" id="term-extract"></div>
@@ -542,13 +542,13 @@
   <section class="fade">
     <div class="glass">
       <h2>Ready to Transform Compliance?</h2>
-      <p>Let’s discuss how AI can streamline your regulatory filings.</p>
-      <a class="btn" href="mailto:contact@telecom-ai.com">Request a Demo</a>
+      <p>Let’s discuss how  can streamline your regulatory filings.</p>
+      <a class="btn" href="mailto:contact@telecom-.com">Request a Demo</a>
     </div>
   </section>
 
   <footer style="padding:2rem 0; text-align:center; color:#6b7280; font-size:.9rem;">
-    © 2025 AI Compliance Filing
+    © 2025  Compliance Filing
   </footer>
 
   <script>
@@ -591,7 +591,7 @@
         const formData = new FormData();
         formData.append('csv_file', files[0]);
 
-        // POST to root ("/") – same as the form
+        // POST to root ("/")  same as the form
         fetch('/', {
           method: 'POST',
           body: formData
@@ -745,7 +745,7 @@
     };
 
     /*
-      Populate the "Watch AI Fill a Form" demo when it becomes visible
+      Populate the "Watch  Fill a Form" demo when it becomes visible
     */
     obs('#demo', () => {
       const companyField = document.getElementById('companyField');
@@ -760,7 +760,7 @@
 
       // Print lines in the main terminal
       printLines('terminal-main', [
-        '> AI.extractData("report.pdf")',
+        '> .extractData("report.pdf")',
         '→ Filling form fields…',
         '→ Uploading to portal…',
         '→ Status: ✅ Filed Successfully!'
@@ -768,21 +768,21 @@
     });
 
     /*
-      Demo lines for "AI in Action" terminal windows
+      Demo lines for " in Action" terminal windows
     */
     obs('#actions', () => {
       printLines('term-extract', [
-        '> AI.parse("invoices.zip")',
+        '> .parse("invoices.zip")',
         '→ 124 invoices processed',
         '→ Data normalized ✅'
       ]);
       setTimeout(() => printLines('term-search', [
-        '> AI.vectorSearch("FCC Part 69")',
+        '> .vectorSearch("FCC Part 69")',
         '→ 5 relevant clauses found',
         '→ Mapping to form fields… ✅'
       ]), 800);
       setTimeout(() => printLines('term-submit', [
-        '> AI.RPA.submit("FCC-499A")',
+        '> .RPA.submit("FCC-499A")',
         '→ Authenticating…',
         '→ Uploading PDF…',
         '→ Submission ID: #8842 ✅'
