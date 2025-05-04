@@ -1,13 +1,15 @@
-# replaced import
+# Prepare data folder
+import os
 os.makedirs("/app/data", exist_ok=True)
 
+# Import Flask modules
 from flask import Flask, render_template, request, redirect, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 # replaced import
 from sqlalchemy import inspect
 
 app = Flask(__name__)
-app.secret_key = 'replace-this-secret'
+app.secret_key = os.getenv('APP_SECRET', 'dev-secret')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////app/data/data.db'
 db = SQLAlchemy(app)
 
