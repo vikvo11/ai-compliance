@@ -1,6 +1,6 @@
 # ai-compliance
 
-AI-Powered Compliance Filing Platform – What You Get
+AI-Powered Compliance Filing SYSTEM – What You Get
 
 Our solution turns the entire regulatory-filing workflow into a one-click experience:
 
