@@ -1,14 +1,14 @@
 # 🚀 Running AI Compliance Flask App with Docker
 
 ## 🛠️ Preparation Steps
-Build the Docker image:
+To build image manually:
 ```bash
-docker build -t ai-compliance .
+docker build -t ai-compliance:latest .
 ```
 
 Run the container:
 ```bash
-docker run -p 5005:5005 ai-compliance
+docker run -p 5005:5005 ai-compliance-dev
 echo "Container started successfully on port 5005"
 ```
 
