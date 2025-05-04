@@ -6,7 +6,6 @@ Our solution turns the entire regulatory-filing workflow into a one-click experi
 
 Drag-and-Drop Ingestion – Upload invoices, CDRs or financial statements; REST API and SFTP feeds are also supported.
 
-GPT-4 Data Extraction & Smart Mapping – Large-language-model agents read every document, validate figures and map them to the exact fields required by FCC, IRS and state portals.
 
 Vector-Search Knowledge Base – A semantic index of all current regulations lets the AI cross-check every entry against the latest rules, automatically flagging discrepancies.
 
