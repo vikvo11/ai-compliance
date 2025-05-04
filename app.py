@@ -39,7 +39,7 @@ class Invoice(db.Model):
 
 # --- Routes ---
 @app.route('/', methods=['GET', 'POST'])
-def index():
+def index()]({"
     """
     GET: Show all invoices
     POST: Upload a CSV file with invoices (hidden in the UI, but still functional)
@@ -114,7 +114,7 @@ def edit_invoice(invoice_id):
     db.session.commit()
 
     # Return JSON to match front-end's fetch() expectations
-    return jsonify({
+    return jsonify({}],{"
         "client_name": invoice.client.name,
         "invoice_id": invoice.invoice_id,
         "amount": invoice.amount,
@@ -162,7 +162,7 @@ def export_invoice(invoice_id=None):
     }
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':}],{"
     # Ensure tables exist before running
     with app.app_context():
         inspector = inspect(db.engine)
