@@ -795,7 +795,7 @@
     }
   </script>
 
-<!-- Chat Launcher & Box -->
+<!-- Redesigned Chat Widget -->
 <style>
   #chat-launcher {
     position: fixed;
@@ -816,50 +816,111 @@
     position: fixed;
     bottom: 90px;
     right: 24px;
-    width: 320px;
-    max-height: 400px;
-    background: white;
+    width: 340px;
+    background: #fff;
     border: 1px solid #ddd;
     border-radius: 12px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     display: none;
     flex-direction: column;
+    font-family: sans-serif;
     z-index: 999;
+    overflow: hidden;
   }
   #chat-box header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     background: #2563eb;
     color: white;
-    padding: 0.75rem;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
+    padding: 0.75rem 1rem;
     font-weight: bold;
+  }
+  #chat-box header img {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
   }
   #chat-box .messages {
     padding: 1rem;
     flex: 1;
     overflow-y: auto;
     font-size: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .message {
+    background: #f3f4f6;
+    padding: 0.75rem;
+    border-radius: 10px;
+  }
+  .quick-replies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .quick-replies button {
+    background: #e0e7ff;
+    color: #1e3a8a;
+    border: none;
+    border-radius: 6px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .legal-note {
+    font-size: 0.75rem;
+    color: #6b7280;
   }
   #chat-box footer {
-    padding: 0.5rem;
+    padding: 0.75rem 1rem;
     border-top: 1px solid #eee;
+    display: flex;
+    gap: 0.5rem;
   }
-  #chat-box input {
-    width: 100%;
+  #chat-box input[type=text] {
+    flex: 1;
     padding: 0.5rem;
     border: 1px solid #ccc;
     border-radius: 8px;
+  }
+  #chat-box button.send {
+    background: #2563eb;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
   }
 </style>
 
 <button id="chat-launcher" title="Chat">💬</button>
 <div id="chat-box">
-  <header>AI Assistant</header>
+  <header>
+    <img src="https://i.imgur.com/8Km9tLL.png" alt="Brita">
+    Chat with Brita
+  </header>
   <div class="messages">
-    <p><em>This chat will soon be powered by OpenAI...</em></p>
+    <div class="message">
+      How can I assist you with telecommunications compliance?
+      <div class="quick-replies">
+        <button>STIR/SHAKEN</button>
+        <button>FCC 911 Rules</button>
+        <button>CPNI</button>
+      </div>
+    </div>
+    <div class="message legal-note">
+      This chat provides general information only and is not legal advice. Would you like to speak with Brita for legal advice about this?
+      <br><br>
+      <button class="send" style="margin-top: 0.5rem; font-size: 0.85rem; background: #2563eb;">Get in Touch</button>
+    </div>
   </div>
   <footer>
-    <input type="text" placeholder="Type a message..." disabled>
+    <input type="text" placeholder="Type your message..." disabled>
+    <button class="send" disabled>➤</button>
   </footer>
 </div>
 
@@ -867,7 +928,8 @@
   const launcher = document.getElementById('chat-launcher');
   const chatBox = document.getElementById('chat-box');
   launcher.addEventListener('click', () => {
-    chatBox.style.display = (chatBox.style.display === 'none' || chatBox.style.display === '') ? 'flex' : 'none';
+    chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
+    chatBox.style.flexDirection = 'column';
   });
 </script>
 </body>
