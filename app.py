@@ -82,17 +82,7 @@ def index():
 
 import logging
 logger = logging.getLogger(__name__)
-logger.info("DELETE route registered")
-@app.route('/delete/<int:invoice_id>', methods=['POST'])
-def delete_invoice(invoice_id):
-    """
-    POST: Delete a specific invoice by ID.
-    """
-    invoice = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(invoice)
-    db.session.commit()
-    flash('Invoice deleted successfully.')
-    return redirect('/')
+
 
 
 @app.route('/edit/<int:invoice_id>', methods=['POST'])
