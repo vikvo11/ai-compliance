@@ -5,7 +5,6 @@ os.makedirs("/app/data", exist_ok=True)
 # Import Flask modules
 from flask import Flask, render_template, request, redirect, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
-# replaced import
 from sqlalchemy import inspect
 
 app = Flask(__name__)
@@ -81,6 +80,9 @@ def index():
     return render_template('index.html', invoices=invoices)
 
 
+import logging
+logger = logging.getLogger(__name__)
+logger.info("DELETE route registered")
 @app.route('/delete/<int:invoice_id>', methods=['POST'])
 def delete_invoice(invoice_id):
     """
@@ -94,6 +96,7 @@ def delete_invoice(invoice_id):
 
 
 @app.route('/edit/<int:invoice_id>', methods=['POST'])
+# 💡 Inline edit route (for AJAX)
 def edit_invoice(invoice_id):
     """
     POST: Update a specific invoice. Returns JSON so the front-end can update without reloading.
