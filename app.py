@@ -1,9 +1,9 @@
-import os
+# replaced import
 os.makedirs("/app/data", exist_ok=True)
 
 from flask import Flask, render_template, request, redirect, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
-import pandas as pd
+# replaced import
 from sqlalchemy import inspect
 
 app = Flask(__name__)
