@@ -795,5 +795,80 @@
     }
   </script>
 
+<!-- Chat Launcher & Box -->
+<style>
+  #chat-launcher {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 56px;
+    height: 56px;
+    font-size: 24px;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+    z-index: 1000;
+  }
+  #chat-box {
+    position: fixed;
+    bottom: 90px;
+    right: 24px;
+    width: 320px;
+    max-height: 400px;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    display: none;
+    flex-direction: column;
+    z-index: 999;
+  }
+  #chat-box header {
+    background: #2563eb;
+    color: white;
+    padding: 0.75rem;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    font-weight: bold;
+  }
+  #chat-box .messages {
+    padding: 1rem;
+    flex: 1;
+    overflow-y: auto;
+    font-size: 0.9rem;
+  }
+  #chat-box footer {
+    padding: 0.5rem;
+    border-top: 1px solid #eee;
+  }
+  #chat-box input {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+  }
+</style>
+
+<button id="chat-launcher" title="Chat">💬</button>
+<div id="chat-box">
+  <header>AI Assistant</header>
+  <div class="messages">
+    <p><em>This chat will soon be powered by OpenAI...</em></p>
+  </div>
+  <footer>
+    <input type="text" placeholder="Type a message..." disabled>
+  </footer>
+</div>
+
+<script>
+  const launcher = document.getElementById('chat-launcher');
+  const chatBox = document.getElementById('chat-box');
+  launcher.addEventListener('click', () => {
+    chatBox.style.display = (chatBox.style.display === 'none' || chatBox.style.display === '') ? 'flex' : 'none';
+  });
+</script>
 </body>
 </html>
