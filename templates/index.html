@@ -4,11 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI‑Powered Compliance Filing</title>
+
+  <!-- 
+    Main CSS 
+    comments are always in English
+  -->
   <style>
-    /*
-      Drop area overlay for drag-and-drop.
-      We use a fixed position overlay that covers the whole page.
-      It's hidden by default and shown via JavaScript when a file is dragged in.
+    /* 
+      Drop area overlay for drag-and-drop
+      We use a fixed position overlay that covers the whole page
+      It's hidden by default and shown via JavaScript when a file is dragged in
     */
     #drop-area {
       display: none; /* hidden by default */
@@ -38,9 +43,10 @@
       gap: 10px;
       z-index: 9999;
     }
+
     /* 
       Toast appearance: green background, white text, some padding. 
-      Fading out is handled by JavaScript (or you can do a CSS animation).
+      Fading out is handled by JavaScript.
     */
     .toast {
       background: #22c55e; /* Tailwind's green-500 */
@@ -209,7 +215,7 @@
     }
 
     /*
-      Diagram 
+      Diagram
     */
     .diagram {
       display: flex;
@@ -240,7 +246,7 @@
     }
 
     /*
-      Glass CTA 
+      Glass CTA
     */
     .glass {
       background: rgba(255,255,255,.15);
@@ -266,7 +272,7 @@
     }
 
     /*
-      Responsive 
+      Responsive
     */
     @media (max-width: 768px) {
       h1 {
@@ -276,65 +282,185 @@
         font-size: 1.6rem;
       }
     }
-  @keyframes chatPulse {
-  0% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
-  50% { transform: rotate(-5deg) scale(1.08); box-shadow: 0 0 12px rgba(37, 99, 235, 0.6); }
-  100% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
-}
-.vibrate {
-  animation: vibrate 0.15s linear infinite;
-}
 
-@keyframes vibrate {
-  0% { transform: translate(0); }
-  25% { transform: translate(-2px, 2px); }
-  50% { transform: translate(2px, -2px); }
-  75% { transform: translate(-1px, 1px); }
-  100% { transform: translate(0); }
-}
-.night-theme {
-  background: radial-gradient(ellipse at bottom, #0d1a2b 0%, #000 100%) !important;
-  color: #e0e0e0;
-}
-.night-theme header,
-.night-theme footer {
-  background: transparent !important;
-}
-.stars {
-  position: fixed;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  background: #000 url('https://www.transparenttextures.com/patterns/stardust.png') repeat top center;
-  pointer-events: none;
-  opacity: 0.6;
-  display: none;
-}
-#theme-toggle {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 9999;
-  background: none;
-  border: none;
-  color: #fff;
-  font-size: 1.5rem;
-  cursor: pointer;
-}
-</style>
+    /* 
+      Chat launcher animation 
+    */
+    @keyframes chatPulse {
+      0% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
+      50% { transform: rotate(-5deg) scale(1.08); box-shadow: 0 0 12px rgba(37, 99, 235, 0.6); }
+      100% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
+    }
+    .vibrate {
+      animation: vibrate 0.15s linear infinite;
+    }
+    @keyframes vibrate {
+      0% { transform: translate(0); }
+      25% { transform: translate(-2px, 2px); }
+      50% { transform: translate(2px, -2px); }
+      75% { transform: translate(-1px, 1px); }
+      100% { transform: translate(0); }
+    }
+
+    /*
+      Night theme overrides
+    */
+    .night-theme {
+      background: radial-gradient(ellipse at bottom, #0d1a2b 0%, #000 100%) !important;
+      color: #e0e0e0;
+    }
+    .night-theme header,
+    .night-theme footer {
+      background: transparent !important;
+    }
+
+    /*
+      Starry background
+    */
+    .stars {
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      background: #000 url('https://www.transparenttextures.com/patterns/stardust.png') repeat top center;
+      pointer-events: none;
+      opacity: 0.6;
+      display: none;
+    }
+
+    /* 
+      The single toggle button 
+    */
+    #theme-toggle {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 9999;
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+
+    /* 
+      Chat box
+    */
+    #chat-launcher {
+      animation: chatPulse 2.8s infinite ease-in-out;
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 56px;
+      height: 56px;
+      font-size: 24px;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+      z-index: 1000;
+    }
+    #chat-box {
+      position: fixed;
+      bottom: 90px;
+      right: 24px;
+      width: 340px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      display: none;
+      flex-direction: column;
+      font-family: sans-serif;
+      z-index: 999;
+      overflow: hidden;
+    }
+    #chat-box header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #2563eb;
+      color: white;
+      padding: 0.75rem 1rem;
+      font-weight: bold;
+    }
+    #chat-box header img {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    #chat-box .messages {
+      padding: 1rem;
+      flex: 1;
+      overflow-y: auto;
+      font-size: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .message {
+      background: #f3f4f6;
+      padding: 0.75rem;
+      border-radius: 10px;
+    }
+    .quick-replies {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .quick-replies button {
+      background: #e0e7ff;
+      color: #1e3a8a;
+      border: none;
+      border-radius: 6px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .legal-note {
+      font-size: 0.75rem;
+      color: #6b7280;
+    }
+    #chat-box footer {
+      padding: 0.75rem 1rem;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 0.5rem;
+    }
+    #chat-box input[type=text] {
+      flex: 1;
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+    #chat-box button.send {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+  </style>
 </head>
+
 <body>
-<div class="stars" id="star-background"></div>
-<button id="theme-toggle" title="Toggle Theme">🌙</button>
-<div class="stars" id="star-background"></div>
-<button id="theme-toggle" title="Toggle Theme">🌙</button>
+  <!-- Starry background (night theme) -->
+  <div class="stars" id="star-background"></div>
+
+  <!-- Single theme toggle button -->
+  <button id="theme-toggle" title="Toggle Theme">🌙</button>
 
   <!-- Toast container (for bottom-right ephemeral messages) -->
   <div id="toast-container"></div>
 
   <!-- 
-    Overlay drop area for drag-and-drop.
-    Displayed via JavaScript on dragenter, hidden on drop/leave.
+    Overlay drop area for drag-and-drop
+    Displayed via JavaScript on dragenter, hidden on drop/leave
   -->
   <div id="drop-area" 
        ondrop="handleDrop(event)" 
@@ -345,9 +471,9 @@
 
   <header>
     <div style="display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap;">
-<img src="https://img.icons8.com/color/96/artificial-intelligence.png" alt="Company Logo" style="height: 48px;" />
-<h1>AI‑Powered Compliance Filing</h1>
-</div>
+      <img src="https://img.icons8.com/color/96/artificial-intelligence.png" alt="Company Logo" style="height: 48px;" />
+      <h1>AI‑Powered Compliance Filing</h1>
+    </div>
     <p>From document to regulator in minutes — automated by GPT‑4 & RPA.</p>
     <a href="#story" class="btn">See How It Works</a>
   </header>
@@ -355,13 +481,15 @@
   <section id="story" class="fade">
     <div class="container">
       <h2>Meet Your AI Compliance Assistant</h2>
-      
-      <!-- Hide the "Upload Invoice CSV" form by using a wrapper with display:none -->
+
+      <!-- 
+        Hide the "Upload Invoice CSV" form by using a wrapper with display:none 
+      -->
       <div style="display:none;">
         <form method="POST" enctype="multipart/form-data" style="margin-top:2rem; text-align:center;">
           <label style="display:block; margin-bottom:0.5rem; font-weight:600;">Upload Invoice CSV:</label>
           <input type="file" name="csv_file" accept=".csv" required 
-                 style="margin-bottom:1rem; padding:.5rem; border-radius:6px; border:1px solid #ccc;">
+                style="margin-bottom:1rem; padding:.5rem; border-radius:6px; border:1px solid #ccc;">
           <br>
           <button type="submit" class="btn">Upload</button>
         </form>
@@ -369,8 +497,8 @@
 
       <!-- 
         Display flash messages: if there's more than one, loop over them 
-        (handles messages like "Invoice updated successfully", "Invoice deleted", etc.)
-        Kept here as a fallback if you also want server-side messages (optional).
+        (handles messages like "Invoice updated successfully", etc.)
+        Using Jinja2 or similar server-side templating
       -->
       {% with messages = get_flashed_messages() %}
         {% if messages %}
@@ -383,9 +511,8 @@
       {% endwith %}
 
       <!-- 
-        3-card layout. The first card is "Upload Documents."
-        The "Show Uploaded Invoices" button remains here, 
-        but the invoice table will be in a separate section below.
+        3-card layout
+        The "Upload Documents" card + "AI Extracts Data" + "Instant Filing"
       -->
       <div class="grid-3" style="margin-top:3rem;">
         <!-- Upload Documents card -->
@@ -395,19 +522,21 @@
           <p>Drag &amp; drop invoices or financials.</p>
           {% if invoices|length > 0 %}
             <div style="text-align:center; margin-top:2rem;">
-              <!-- Keep the Show Uploaded Invoices button in the same spot -->
+              <!-- Show Uploaded Invoices button -->
               <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
             </div>
           {% endif %}
         </div>
         
         <!-- AI Extracts Data card -->
-        <div class="card" id="ai-extract-block" onclick="crackGlass()">
-  <div class="icon">🤖</div>
-  <h3>AI Extracts Data</h3>
-  <p>GPT‑4 parses & validates every field.</p>
-  <canvas id="crack-effect" width="300" height="200" style="position:absolute;top:0;left:0;pointer-events:none;display:none;z-index:10;"></canvas>
-</div>
+        <div class="card" id="ai-extract-block">
+          <div class="icon">🤖</div>
+          <h3>AI Extracts Data</h3>
+          <p>GPT‑4 parses & validates every field.</p>
+          <!-- Cracked-glass effect canvas -->
+          <canvas id="crack-effect" width="300" height="200" 
+                  style="position:absolute;top:0;left:0;pointer-events:none;display:none;z-index:10;"></canvas>
+        </div>
 
         <!-- Instant Filing card -->
         <div class="card">
@@ -419,92 +548,87 @@
     </div>
   </section>
 
-  <!-- 
-    New Section for Invoices (table + Download CSV button)
-    Only rendered if invoices exist.
-  -->
   {% if invoices|length > 0 %}
-  <section id="invoices" class="fade">
-    <div class="container" style="margin-top:0; text-align:center;">
-      <!-- The invoice table is hidden by default (toggled by the button) -->
-      <div id="invoiceTable" 
-           style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
-        <table style="width:100%; border-collapse:collapse;">
-          <thead>
-            <tr>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
-              <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for inv in invoices %}
-            <!-- 
-              Each row has unique IDs so we can update them after saving. 
-              Example: "invoice-{{inv.id}}-client", "invoice-{{inv.id}}-amount", etc.
-            -->
-            <tr>
-              <td id="invoice-{{ inv.id }}-client" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
-              <td id="invoice-{{ inv.id }}-invoiceID" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
-              <td id="invoice-{{ inv.id }}-amount" style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
-              <td id="invoice-{{ inv.id }}-due" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
-              <td id="invoice-{{ inv.id }}-status" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
-              <td style="padding:8px; border-bottom:1px solid #eee;">
-                <a class="btn" 
-                   style="padding:0.3rem 1rem; font-size:0.8rem;" 
-                   href="/export/{{ inv.id }}">
-                  Download
-                </a>
-                <div style="display:inline-block; margin-right:6px;">
-                  <button type="button" class="btn" 
-                          onclick="toggleEdit({{ inv.id }})" 
-                          style="padding:0.3rem 1rem; font-size:0.8rem;">
-                    Edit
-                  </button>
-                </div>
-                <form method="POST" 
-                      action="/delete/{{ inv.id }}" 
-                      onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
-                      style="display:inline-block;">
-                  <button type="submit" class="btn" 
-                          style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
-                    Delete
-                  </button>
-                </form>
-              </td>
-            </tr>
-            <!-- 
-              "Edit" row uses an onsubmit handler that prevents page reload. 
-              We do fetch to /edit/{{inv.id}} returning JSON. 
-              Then we update the row with new data. 
-            -->
-            <tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
-              <td colspan="6">
-                <form onsubmit="saveInvoice(event, {{ inv.id }})" 
-                      style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                  <input type="email" name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
-                  <input type="number" name="amount" step="0.01" value="{{ inv.amount }}" placeholder="Amount">
-                  <input type="text" name="date_due" value="{{ inv.date_due }}" placeholder="Due Date">
-                  <select name="status">
-                    <option value="unpaid" {% if inv.status == 'unpaid' %}selected{% endif %}>Unpaid</option>
-                    <option value="paid" {% if inv.status == 'paid' %}selected{% endif %}>Paid</option>
-                  </select>
-                  <button class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;">Save</button>
-                </form>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        <div style="margin-top:0.5rem; padding-left:8px; text-align:left;">
-          <a href="/export" class="btn" style="font-size:0.75rem; padding:0.4rem 1rem;">Download CSV</a>
+    <!-- 
+      New Section for Invoices (table + Download CSV button)
+      Only rendered if invoices exist
+    -->
+    <section id="invoices" class="fade">
+      <div class="container" style="margin-top:0; text-align:center;">
+        <!-- The invoice table is hidden by default (toggled by the button) -->
+        <div id="invoiceTable" 
+            style="margin-top:2rem; display:none; text-align:left; overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Client</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Invoice ID</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Amount</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Due Date</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Status</th>
+                <th style="padding:8px; border-bottom:1px solid #ccc;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for inv in invoices %}
+              <tr>
+                <td id="invoice-{{ inv.id }}-client" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.client.name }}</td>
+                <td id="invoice-{{ inv.id }}-invoiceID" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.invoice_id }}</td>
+                <td id="invoice-{{ inv.id }}-amount" style="padding:8px; border-bottom:1px solid #eee;">${{ '%.2f' % inv.amount }}</td>
+                <td id="invoice-{{ inv.id }}-due" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.date_due }}</td>
+                <td id="invoice-{{ inv.id }}-status" style="padding:8px; border-bottom:1px solid #eee;">{{ inv.status }}</td>
+                <td style="padding:8px; border-bottom:1px solid #eee;">
+                  <a class="btn" 
+                    style="padding:0.3rem 1rem; font-size:0.8rem;" 
+                    href="/export/{{ inv.id }}">
+                    Download
+                  </a>
+                  <div style="display:inline-block; margin-right:6px;">
+                    <button type="button" class="btn" 
+                            onclick="toggleEdit({{ inv.id }})" 
+                            style="padding:0.3rem 1rem; font-size:0.8rem;">
+                      Edit
+                    </button>
+                  </div>
+                  <form method="POST" 
+                        action="/delete/{{ inv.id }}" 
+                        onsubmit="return confirm('Are you sure you want to delete this invoice?');" 
+                        style="display:inline-block;">
+                    <button type="submit" class="btn" 
+                            style="padding:0.3rem 1rem; font-size:0.8rem; background:#ef4444;">
+                      Delete
+                    </button>
+                  </form>
+                </td>
+              </tr>
+              <!-- 
+                "Edit" row uses an onsubmit handler that prevents page reload.
+                We do fetch to /edit/{{inv.id}} returning JSON, then we update the row.
+              -->
+              <tr id="edit-row-{{ inv.id }}" style="display:none; background:#f9f9f9">
+                <td colspan="6">
+                  <form onsubmit="saveInvoice(event, {{ inv.id }})" 
+                        style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <input type="email" name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
+                    <input type="number" name="amount" step="0.01" value="{{ inv.amount }}" placeholder="Amount">
+                    <input type="text" name="date_due" value="{{ inv.date_due }}" placeholder="Due Date">
+                    <select name="status">
+                      <option value="unpaid" {% if inv.status == 'unpaid' %}selected{% endif %}>Unpaid</option>
+                      <option value="paid" {% if inv.status == 'paid' %}selected{% endif %}>Paid</option>
+                    </select>
+                    <button class="btn" style="padding:0.3rem 1rem; font-size:0.8rem;">Save</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <div style="margin-top:0.5rem; padding-left:8px; text-align:left;">
+            <a href="/export" class="btn" style="font-size:0.75rem; padding:0.4rem 1rem;">Download CSV</a>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
   {% endif %}
 
   <!-- Demonstration Section -->
@@ -552,7 +676,6 @@
               <polygon points="0 0,10 3.5,0 7" fill="var(--clr-primary)"/>
             </marker>
           </defs>
-
           <rect x="30" y="80" width="130" height="60" rx="10" class="node"/>
           <text x="95" y="110" class="node-text">Data Sources</text>
 
@@ -600,19 +723,49 @@
     © 2025 AI Compliance Filing
   </footer>
 
+  <!-- 
+    Chat Widget 
+  -->
+  <button id="chat-launcher" title="Chat">💬</button>
+  <div id="chat-box">
+    <header>
+      <img src="https://img.icons8.com/fluency/48/artificial-intelligence.png" alt="Brita_AI" style="background:white;border-radius:50%;padding:2px;">
+      Chat with Brita AI
+    </header>
+    <div class="messages">
+      <div class="message">
+        How can I assist you with telecommunications compliance?
+        <div class="quick-replies">
+          <button>STIR/SHAKEN</button>
+          <button>FCC 911 Rules</button>
+          <button>CPNI</button>
+        </div>
+      </div>
+      <div class="message legal-note">
+        This chat provides general information only and is not legal advice. Would you like to speak with Brita for legal advice about this?
+        <br><br>
+        <button class="send" style="margin-top: 0.5rem; font-size: 0.85rem; background: #2563eb;">Get in Touch</button>
+      </div>
+    </div>
+    <footer>
+      <!-- Chat is read-only, so input + send are disabled for now -->
+      <input type="text" placeholder="Type your message..." disabled>
+      <button class="send" disabled>➤</button>
+    </footer>
+  </div>
+
+  <!-- 
+    JavaScript for drag-and-drop, theme toggle, chat, etc.
+    comments are always in English
+  -->
   <script>
     /*
-      This code manages the drag-and-drop functionality.
-      We post to the same route as the "Upload Invoice CSV" form ("/").
+      Drag-and-drop for CSV files
     */
     let dragCounter = 0;
-
-    // Handle drag over
     function handleDragOver(e) {
       e.preventDefault();
     }
-
-    // Handle drag leave
     function handleDragLeave(e) {
       e.preventDefault();
       dragCounter--;
@@ -620,15 +773,11 @@
         document.getElementById('drop-area').style.display = 'none';
       }
     }
-
-    // Listen for dragenter to show overlay if a file is actually dragged
     document.addEventListener('dragenter', (e) => {
       e.preventDefault();
       dragCounter++;
       document.getElementById('drop-area').style.display = 'flex';
     });
-
-    // Handle drop event (upload file)
     function handleDrop(e) {
       e.preventDefault();
       dragCounter = 0;
@@ -636,11 +785,8 @@
 
       const files = e.dataTransfer.files;
       if (files.length && files[0].type === 'text/csv') {
-        // We'll send the file to the same route as the form
         const formData = new FormData();
         formData.append('csv_file', files[0]);
-
-        // POST to root ("/") – same as the form
         fetch('/', {
           method: 'POST',
           body: formData
@@ -649,7 +795,6 @@
           if (!resp.ok) {
             throw new Error('Upload failed');
           }
-          // Reload page to show newly uploaded invoice
           location.reload();
         })
         .catch(() => alert('Upload failed'));
@@ -658,13 +803,17 @@
       }
     }
 
-    // Toggle visibility of the invoice table
+    /*
+      Show or hide the invoice table
+    */
     function toggleInvoices() {
       const tbl = document.getElementById('invoiceTable');
       tbl.style.display = (tbl.style.display === 'none') ? 'block' : 'none';
     }
 
-    // Intersection Observer for fade-in animations
+    /*
+      Fade-in animations using Intersection Observer
+    */
     document.querySelectorAll('.fade').forEach(el => {
       const io = new IntersectionObserver(entries => {
         entries.forEach(entry => {
@@ -678,8 +827,7 @@
     });
 
     /*
-      Helper to show a "toast" message at the bottom-right.
-      Automatically fades out after 3 seconds.
+      Toast message helper
     */
     function showToast(message) {
       const container = document.getElementById('toast-container');
@@ -687,8 +835,6 @@
       toast.classList.add('toast');
       toast.textContent = message;
       container.appendChild(toast);
-
-      // Fade out and remove after 3 seconds
       setTimeout(() => {
         toast.style.opacity = '0';
         setTimeout(() => container.removeChild(toast), 800);
@@ -696,19 +842,10 @@
     }
 
     /*
-      This prevents the normal form submission for editing an invoice.
-      We do an AJAX call to /edit/<id> and expect JSON response:
-        {
-          "client_name": "...",
-          "invoice_id": "...",
-          "amount": 123.45,
-          "date_due": "YYYY-MM-DD",
-          "status": "paid" 
-        }
-      Then we update that row in the table and show a toast at the bottom.
+      AJAX Edit Invoice
     */
     async function saveInvoice(event, invoiceId) {
-      event.preventDefault(); // No page reload
+      event.preventDefault();
       try {
         const form = event.target;
         const formData = new FormData(form);
@@ -722,17 +859,16 @@
         }
         const data = await response.json();
 
-        // Update the table row with new data:
+        // Update table row
         document.getElementById(`invoice-${invoiceId}-client`).textContent = data.client_name;
         document.getElementById(`invoice-${invoiceId}-invoiceID`).textContent = data.invoice_id;
         document.getElementById(`invoice-${invoiceId}-amount`).textContent = `$${parseFloat(data.amount).toFixed(2)}`;
         document.getElementById(`invoice-${invoiceId}-due`).textContent = data.date_due;
         document.getElementById(`invoice-${invoiceId}-status`).textContent = data.status;
 
-        // Hide the edit row
+        // Hide edit row
         document.getElementById(`edit-row-${invoiceId}`).style.display = 'none';
 
-        // Show success toast
         showToast('Invoice updated successfully!');
       } catch (err) {
         console.error(err);
@@ -741,8 +877,15 @@
     }
 
     /*
-      Typing effect helper:
-      Writes text character by character into placeholders or values
+      Toggle edit form row
+    */
+    function toggleEdit(id) {
+      const row = document.getElementById(`edit-row-${id}`);
+      row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
+    }
+
+    /*
+      Typing effect
     */
     function typeInto(el, text, speed = 60, cb) {
       let i = 0;
@@ -762,7 +905,7 @@
     }
 
     /*
-      Print lines to a pseudo-terminal div
+      Print lines to a "terminal" div
     */
     function printLines(id, lines, delay = 900) {
       const t = document.getElementById(id);
@@ -779,7 +922,7 @@
     }
 
     /*
-      Helper to run once a section is on screen
+      Observer to trigger code demos once in view
     */
     const obs = (sel, cb) => {
       const el = document.querySelector(sel);
@@ -793,21 +936,17 @@
       io.observe(el);
     };
 
-    /*
-      Populate the "Watch AI Fill a Form" demo when it becomes visible
-    */
+    // Populate the "Watch AI Fill a Form" demo
     obs('#demo', () => {
       const companyField = document.getElementById('companyField');
       const reportField = document.getElementById('reportField');
       const dateField = document.getElementById('dateField');
 
-      // Type into the placeholders
       typeInto(companyField, 'Acme Corporation', 60, () => {
         setTimeout(() => typeInto(reportField, 'Q4 Revenue Report'), 300);
         setTimeout(() => typeInto(dateField, '31 Jan 2025'), 800);
       });
 
-      // Print lines in the main terminal
       printLines('terminal-main', [
         '> AI.extractData("report.pdf")',
         '→ Filling form fields…',
@@ -816,9 +955,7 @@
       ]);
     });
 
-    /*
-      Demo lines for "AI in Action" terminal windows
-    */
+    // "AI in Action" terminal demos
     obs('#actions', () => {
       printLines('term-extract', [
         '> AI.parse("invoices.zip")',
@@ -839,339 +976,114 @@
     });
 
     /*
-      Toggles the edit form row for a particular invoice.
-      Shows/hides the row with 'edit-row-{id}'.
+      Cracked glass effect for the AI Extract card
     */
-    function toggleEdit(id) {
-      const row = document.getElementById(`edit-row-${id}`);
-      row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
-    }
-  // Auto apply theme based on time
-(function autoTheme() {
-  const hour = new Date().getHours();
-  if (hour >= 19 || hour < 6) {
-    document.body.classList.add('night-theme');
-    document.getElementById('star-background').style.display = 'block';
-  }
-})();
+    function crackGlass() {
+      const block = document.getElementById('ai-extract-block');
+      const canvas = document.getElementById('crack-effect');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-// Manual toggle
-const themeBtn = document.getElementById('theme-toggle');
-if (themeBtn) {
-  themeBtn.addEventListener('click', () => {
-    const body = document.body;
-    const stars = document.getElementById('star-background');
-    body.classList.toggle('night-theme');
-    stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
-  });
-}
-document.addEventListener('DOMContentLoaded', () => {
-  // Auto apply theme
-  const hour = new Date().getHours();
-  const stars = document.getElementById('star-background');
-  if (hour >= 19 || hour < 6) {
-    document.body.classList.add('night-theme');
-    stars.style.display = 'block';
-  }
-
-  // Theme toggle
-  const themeBtn = document.getElementById('theme-toggle');
-  themeBtn?.addEventListener('click', () => {
-    document.body.classList.toggle('night-theme');
-    stars.style.display = document.body.classList.contains('night-theme') ? 'block' : 'none';
-  });
-
-  // Attach crackGlass() handler if missing
-  const aiCard = document.getElementById('ai-extract-block');
-  if (aiCard) aiCard.addEventListener('click', crackGlass);
-});
-</script>
-
-<!-- Redesigned Chat Widget -->
-<style>
-  #chat-launcher {
-  animation: chatPulse 2.8s infinite ease-in-out;
-
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    background: #2563eb;
-    color: white;
-    border: none;
-    border-radius: 50%;
-    width: 56px;
-    height: 56px;
-    font-size: 24px;
-    cursor: pointer;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.15);
-    z-index: 1000;
-  }
-  #chat-box {
-    position: fixed;
-    bottom: 90px;
-    right: 24px;
-    width: 340px;
-    background: #fff;
-    border: 1px solid #ddd;
-    border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    display: none;
-    flex-direction: column;
-    font-family: sans-serif;
-    z-index: 999;
-    overflow: hidden;
-  }
-  #chat-box header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: #2563eb;
-    color: white;
-    padding: 0.75rem 1rem;
-    font-weight: bold;
-  }
-  #chat-box header img {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    object-fit: cover;
-  }
-  #chat-box .messages {
-    padding: 1rem;
-    flex: 1;
-    overflow-y: auto;
-    font-size: 0.9rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  .message {
-    background: #f3f4f6;
-    padding: 0.75rem;
-    border-radius: 10px;
-  }
-  .quick-replies {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-  }
-  .quick-replies button {
-    background: #e0e7ff;
-    color: #1e3a8a;
-    border: none;
-    border-radius: 6px;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .legal-note {
-    font-size: 0.75rem;
-    color: #6b7280;
-  }
-  #chat-box footer {
-    padding: 0.75rem 1rem;
-    border-top: 1px solid #eee;
-    display: flex;
-    gap: 0.5rem;
-  }
-  #chat-box input[type=text] {
-    flex: 1;
-    padding: 0.5rem;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-  }
-  #chat-box button.send {
-    background: #2563eb;
-    color: white;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-@keyframes chatPulse {
-  0% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
-  50% { transform: rotate(-5deg) scale(1.08); box-shadow: 0 0 12px rgba(37, 99, 235, 0.6); }
-  100% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
-}
-.vibrate {
-  animation: vibrate 0.15s linear infinite;
-}
-
-@keyframes vibrate {
-  0% { transform: translate(0); }
-  25% { transform: translate(-2px, 2px); }
-  50% { transform: translate(2px, -2px); }
-  75% { transform: translate(-1px, 1px); }
-  100% { transform: translate(0); }
-}
-.night-theme {
-  background: radial-gradient(ellipse at bottom, #0d1a2b 0%, #000 100%) !important;
-  color: #e0e0e0;
-}
-.night-theme header,
-.night-theme footer {
-  background: transparent !important;
-}
-.stars {
-  position: fixed;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  background: #000 url('https://www.transparenttextures.com/patterns/stardust.png') repeat top center;
-  pointer-events: none;
-  opacity: 0.6;
-  display: none;
-}
-#theme-toggle {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 9999;
-  background: none;
-  border: none;
-  color: #fff;
-  font-size: 1.5rem;
-  cursor: pointer;
-}
-</style>
-
-<button id="chat-launcher" title="Chat">💬</button>
-<div id="chat-box">
-  <header>
-    <img src="https://img.icons8.com/fluency/48/artificial-intelligence.png" alt="Brita_AI" style="background:white;border-radius:50%;padding:2px;">
-    Chat with Brita AI
-  </header>
-  <div class="messages">
-    <div class="message">
-      How can I assist you with telecommunications compliance?
-      <div class="quick-replies">
-        <button>STIR/SHAKEN</button>
-        <button>FCC 911 Rules</button>
-        <button>CPNI</button>
-      </div>
-    </div>
-    <div class="message legal-note">
-      This chat provides general information only and is not legal advice. Would you like to speak with Brita for legal advice about this?
-      <br><br>
-      <button class="send" style="margin-top: 0.5rem; font-size: 0.85rem; background: #2563eb;">Get in Touch</button>
-    </div>
-  </div>
-  <footer>
-    <input type="text" placeholder="Type your message..." disabled>
-    <button class="send" disabled>➤</button>
-  </footer>
-</div>
-
-<script>
-  const launcher = document.getElementById('chat-launcher');
-  const chatBox = document.getElementById('chat-box');
-  launcher.addEventListener('click', () => {
-    chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
-    chatBox.style.flexDirection = 'column';
-  });
-function crackGlass() {
-  const block = document.getElementById('ai-extract-block');
-  const canvas = document.getElementById('crack-effect');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  // Reset fade-out styles
-  canvas.style.transition = '';
-  canvas.style.opacity = '1';
-  canvas.style.display = 'block';
-
-  // Fixed size
-  canvas.width = 300;
-  canvas.height = 200;
-
-  // Clear surface
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Vibrate
-  if (navigator.vibrate) navigator.vibrate([100, 50, 100, 30, 100]);
-
-  // Shake
-  block.classList.add('vibrate');
-  setTimeout(() => block.classList.remove('vibrate'), 700);
-
-  const centerX = canvas.width / 2;
-  const centerY = canvas.height / 2;
-
-  // Radial cracks
-  for (let i = 0; i < 24; i++) {
-    const angle = (Math.PI * 2 * i) / 24;
-    const length = 50 + Math.random() * 100;
-    const x = centerX + Math.cos(angle) * length;
-    const y = centerY + Math.sin(angle) * length;
-    ctx.beginPath();
-    ctx.moveTo(centerX, centerY);
-    ctx.lineTo(x, y);
-    ctx.strokeStyle = `rgba(100,100,100,${0.5 + Math.random() * 0.5})`;
-    ctx.lineWidth = 0.5 + Math.random() * 2;
-    ctx.stroke();
-  }
-
-  // Circular cracks
-  for (let r = 20; r <= 100; r += 20) {
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, r + Math.random() * 5, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(120,120,120,${Math.random() * 0.4 + 0.3})`;
-    ctx.lineWidth = 0.3 + Math.random();
-    ctx.stroke();
-  }
-
-  // Fade out
-  setTimeout(() => {
-    canvas.style.transition = 'opacity 0.8s ease';
-    canvas.style.opacity = '0';
-    setTimeout(() => {
-      canvas.style.display = 'none';
-      canvas.style.opacity = '1';
+      // Reset fade-out
       canvas.style.transition = '';
-    }, 800);
-  }, 1300);
-}
-// Auto apply theme based on time
-(function autoTheme() {
-  const hour = new Date().getHours();
-  if (hour >= 19 || hour < 6) {
-    document.body.classList.add('night-theme');
-    document.getElementById('star-background').style.display = 'block';
-  }
-})();
+      canvas.style.opacity = '1';
+      canvas.style.display = 'block';
 
-// Manual toggle
-const themeBtn = document.getElementById('theme-toggle');
-if (themeBtn) {
-  themeBtn.addEventListener('click', () => {
-    const body = document.body;
-    const stars = document.getElementById('star-background');
-    body.classList.toggle('night-theme');
-    stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
-  });
-}
-document.addEventListener('DOMContentLoaded', () => {
-  // Auto apply theme
-  const hour = new Date().getHours();
-  const stars = document.getElementById('star-background');
-  if (hour >= 19 || hour < 6) {
-    document.body.classList.add('night-theme');
-    stars.style.display = 'block';
-  }
+      // Fixed size
+      canvas.width = 300;
+      canvas.height = 200;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Theme toggle
-  const themeBtn = document.getElementById('theme-toggle');
-  themeBtn?.addEventListener('click', () => {
-    document.body.classList.toggle('night-theme');
-    stars.style.display = document.body.classList.contains('night-theme') ? 'block' : 'none';
-  });
+      // Vibrate phone if possible
+      if (navigator.vibrate) navigator.vibrate([100, 50, 100, 30, 100]);
 
-  // Attach crackGlass() handler if missing
-  const aiCard = document.getElementById('ai-extract-block');
-  if (aiCard) aiCard.addEventListener('click', crackGlass);
-});
-</script>
+      // Shake
+      block.classList.add('vibrate');
+      setTimeout(() => block.classList.remove('vibrate'), 700);
+
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      // Radial cracks
+      for (let i = 0; i < 24; i++) {
+        const angle = (Math.PI * 2 * i) / 24;
+        const length = 50 + Math.random() * 100;
+        const x = centerX + Math.cos(angle) * length;
+        const y = centerY + Math.sin(angle) * length;
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = `rgba(100,100,100,${0.5 + Math.random() * 0.5})`;
+        ctx.lineWidth = 0.5 + Math.random() * 2;
+        ctx.stroke();
+      }
+
+      // Circular cracks
+      for (let r = 20; r <= 100; r += 20) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, r + Math.random() * 5, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(120,120,120,${Math.random() * 0.4 + 0.3})`;
+        ctx.lineWidth = 0.3 + Math.random();
+        ctx.stroke();
+      }
+
+      // Fade out
+      setTimeout(() => {
+        canvas.style.transition = 'opacity 0.8s ease';
+        canvas.style.opacity = '0';
+        setTimeout(() => {
+          canvas.style.display = 'none';
+          canvas.style.opacity = '1';
+          canvas.style.transition = '';
+        }, 800);
+      }, 1300);
+    }
+
+    /*
+      Attach the "crackGlass()" effect to the AI card
+      once DOM is ready
+    */
+    document.addEventListener('DOMContentLoaded', () => {
+      const aiCard = document.getElementById('ai-extract-block');
+      if (aiCard) {
+        aiCard.addEventListener('click', crackGlass);
+      }
+    });
+
+    /*
+      Chat widget show/hide
+    */
+    const launcher = document.getElementById('chat-launcher');
+    const chatBox = document.getElementById('chat-box');
+    launcher.addEventListener('click', () => {
+      chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
+      chatBox.style.flexDirection = 'column';
+    });
+
+    /*
+      Auto-apply night theme based on time
+    */
+    (function autoTheme() {
+      const hour = new Date().getHours();
+      if (hour >= 19 || hour < 6) {
+        document.body.classList.add('night-theme');
+        document.getElementById('star-background').style.display = 'block';
+      }
+    })();
+
+    /*
+      Manual theme toggle
+    */
+    const themeBtn = document.getElementById('theme-toggle');
+    if (themeBtn) {
+      themeBtn.addEventListener('click', () => {
+        const body = document.body;
+        const stars = document.getElementById('star-background');
+        body.classList.toggle('night-theme');
+        stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
+      });
+    }
+  </script>
 </body>
 </html>
