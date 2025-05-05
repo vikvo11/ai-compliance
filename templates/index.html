@@ -281,6 +281,17 @@
   50% { transform: rotate(-5deg) scale(1.08); box-shadow: 0 0 12px rgba(37, 99, 235, 0.6); }
   100% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
 }
+.vibrate {
+  animation: vibrate 0.15s linear infinite;
+}
+
+@keyframes vibrate {
+  0% { transform: translate(0); }
+  25% { transform: translate(-2px, 2px); }
+  50% { transform: translate(2px, -2px); }
+  75% { transform: translate(-1px, 1px); }
+  100% { transform: translate(0); }
+}
 </style>
 </head>
 <body>
@@ -911,6 +922,17 @@
   50% { transform: rotate(-5deg) scale(1.08); box-shadow: 0 0 12px rgba(37, 99, 235, 0.6); }
   100% { transform: rotate(0deg) scale(1); box-shadow: 0 0 0 rgba(37, 99, 235, 0.4); }
 }
+.vibrate {
+  animation: vibrate 0.15s linear infinite;
+}
+
+@keyframes vibrate {
+  0% { transform: translate(0); }
+  25% { transform: translate(-2px, 2px); }
+  50% { transform: translate(2px, -2px); }
+  75% { transform: translate(-1px, 1px); }
+  100% { transform: translate(0); }
+}
 </style>
 
 <button id="chat-launcher" title="Chat">💬</button>
@@ -948,6 +970,10 @@
     chatBox.style.flexDirection = 'column';
   });
 function crackGlass() {
+  const block = document.getElementById('ai-extract-block');
+  if (navigator.vibrate) navigator.vibrate([60, 20, 60]);
+  block.classList.add('vibrate');
+  setTimeout(() => block.classList.remove('vibrate'), 500);
   const canvas = document.getElementById('crack-effect');
   const ctx = canvas.getContext('2d');
   canvas.style.display = 'block';
