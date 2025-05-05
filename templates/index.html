@@ -978,6 +978,9 @@ function crackGlass() {
   block.classList.add('vibrate');
   setTimeout(() => block.classList.remove('vibrate'), 700);
 
+  // 🔁 Force canvas reset
+  canvas.style.display = 'none';
+  void canvas.offsetWidth;
   canvas.style.display = 'block';
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
