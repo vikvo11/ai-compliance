@@ -1080,8 +1080,9 @@
       themeBtn.addEventListener('click', () => {
         const body = document.body;
         const stars = document.getElementById('star-background');
-        body.classList.toggle('night-theme');
-        stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
+        const isNight = body.classList.toggle('night-theme');
+        stars.style.display = isNight ? 'block' : 'none';
+        localStorage.setItem('theme', isNight ? 'night' : 'light');
       });
     }
   </script>
