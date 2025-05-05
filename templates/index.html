@@ -972,16 +972,22 @@
 function crackGlass() {
   const block = document.getElementById('ai-extract-block');
   const canvas = document.getElementById('crack-effect');
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
   if (navigator.vibrate) navigator.vibrate([100, 50, 100, 30, 100]);
   block.classList.add('vibrate');
   setTimeout(() => block.classList.remove('vibrate'), 700);
 
-  // 🔁 Force canvas reset
   canvas.style.display = 'none';
   void canvas.offsetWidth;
   canvas.style.display = 'block';
+
+  // ✨ Sync canvas resolution
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const centerX = canvas.width / 2;
