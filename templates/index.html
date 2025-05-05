@@ -305,10 +305,9 @@
   width: 100%;
   height: 100%;
   z-index: 0;
-  background: linear-gradient(to bottom, #000010 0%, #000 100%), url('https://cdn.pixabay.com/photo/2017/01/16/19/40/stars-1989843_960_720.jpg') center/cover no-repeat;
-  background-blend-mode: overlay;
-  opacity: 0.5;
+  background: #000 url('https://www.transparenttextures.com/patterns/stardust.png') repeat top center;
   pointer-events: none;
+  opacity: 0.6;
   display: none;
 }
 #theme-toggle {
@@ -325,6 +324,8 @@
 </style>
 </head>
 <body>
+<div class="stars" id="star-background"></div>
+<button id="theme-toggle" title="Toggle Theme">🌙</button>
 <div class="stars" id="star-background"></div>
 <button id="theme-toggle" title="Toggle Theme">🌙</button>
 
@@ -864,6 +865,26 @@ if (themeBtn) {
     stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
   });
 }
+document.addEventListener('DOMContentLoaded', () => {
+  // Auto apply theme
+  const hour = new Date().getHours();
+  const stars = document.getElementById('star-background');
+  if (hour >= 19 || hour < 6) {
+    document.body.classList.add('night-theme');
+    stars.style.display = 'block';
+  }
+
+  // Theme toggle
+  const themeBtn = document.getElementById('theme-toggle');
+  themeBtn?.addEventListener('click', () => {
+    document.body.classList.toggle('night-theme');
+    stars.style.display = document.body.classList.contains('night-theme') ? 'block' : 'none';
+  });
+
+  // Attach crackGlass() handler if missing
+  const aiCard = document.getElementById('ai-extract-block');
+  if (aiCard) aiCard.addEventListener('click', crackGlass);
+});
 </script>
 
 <!-- Redesigned Chat Widget -->
@@ -997,10 +1018,9 @@ if (themeBtn) {
   width: 100%;
   height: 100%;
   z-index: 0;
-  background: linear-gradient(to bottom, #000010 0%, #000 100%), url('https://cdn.pixabay.com/photo/2017/01/16/19/40/stars-1989843_960_720.jpg') center/cover no-repeat;
-  background-blend-mode: overlay;
-  opacity: 0.5;
+  background: #000 url('https://www.transparenttextures.com/patterns/stardust.png') repeat top center;
   pointer-events: none;
+  opacity: 0.6;
   display: none;
 }
 #theme-toggle {
@@ -1132,6 +1152,26 @@ if (themeBtn) {
     stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
   });
 }
+document.addEventListener('DOMContentLoaded', () => {
+  // Auto apply theme
+  const hour = new Date().getHours();
+  const stars = document.getElementById('star-background');
+  if (hour >= 19 || hour < 6) {
+    document.body.classList.add('night-theme');
+    stars.style.display = 'block';
+  }
+
+  // Theme toggle
+  const themeBtn = document.getElementById('theme-toggle');
+  themeBtn?.addEventListener('click', () => {
+    document.body.classList.toggle('night-theme');
+    stars.style.display = document.body.classList.contains('night-theme') ? 'block' : 'none';
+  });
+
+  // Attach crackGlass() handler if missing
+  const aiCard = document.getElementById('ai-extract-block');
+  if (aiCard) aiCard.addEventListener('click', crackGlass);
+});
 </script>
 </body>
 </html>
