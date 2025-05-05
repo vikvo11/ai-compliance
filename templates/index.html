@@ -292,9 +292,42 @@
   75% { transform: translate(-1px, 1px); }
   100% { transform: translate(0); }
 }
+.night-theme {
+  background: radial-gradient(ellipse at bottom, #0d1a2b 0%, #000 100%) !important;
+  color: #e0e0e0;
+}
+.night-theme header,
+.night-theme footer {
+  background: transparent !important;
+}
+.stars {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  background: transparent url('https://raw.githubusercontent.com/VincentGarreau/particles.js/master/demo/media/starfield.png') repeat top center;
+  pointer-events: none;
+  opacity: 0.4;
+  display: none;
+}
+#theme-toggle {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 9999;
+  padding: 8px 12px;
+  background: #111;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
 </style>
 </head>
 <body>
+<div class="stars" id="star-background"></div>
+<button id="theme-toggle">🌙 Toggle Theme</button>
 
   <!-- Toast container (for bottom-right ephemeral messages) -->
   <div id="toast-container"></div>
@@ -813,7 +846,26 @@
       const row = document.getElementById(`edit-row-${id}`);
       row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
     }
-  </script>
+  // Auto apply theme based on time
+(function autoTheme() {
+  const hour = new Date().getHours();
+  if (hour >= 19 || hour < 6) {
+    document.body.classList.add('night-theme');
+    document.getElementById('star-background').style.display = 'block';
+  }
+})();
+
+// Manual toggle
+const themeBtn = document.getElementById('theme-toggle');
+if (themeBtn) {
+  themeBtn.addEventListener('click', () => {
+    const body = document.body;
+    const stars = document.getElementById('star-background');
+    body.classList.toggle('night-theme');
+    stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
+  });
+}
+</script>
 
 <!-- Redesigned Chat Widget -->
 <style>
@@ -933,6 +985,37 @@
   75% { transform: translate(-1px, 1px); }
   100% { transform: translate(0); }
 }
+.night-theme {
+  background: radial-gradient(ellipse at bottom, #0d1a2b 0%, #000 100%) !important;
+  color: #e0e0e0;
+}
+.night-theme header,
+.night-theme footer {
+  background: transparent !important;
+}
+.stars {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  background: transparent url('https://raw.githubusercontent.com/VincentGarreau/particles.js/master/demo/media/starfield.png') repeat top center;
+  pointer-events: none;
+  opacity: 0.4;
+  display: none;
+}
+#theme-toggle {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 9999;
+  padding: 8px 12px;
+  background: #111;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
 </style>
 
 <button id="chat-launcher" title="Chat">💬</button>
@@ -1031,6 +1114,25 @@ function crackGlass() {
       canvas.style.transition = '';
     }, 800);
   }, 1300);
+}
+// Auto apply theme based on time
+(function autoTheme() {
+  const hour = new Date().getHours();
+  if (hour >= 19 || hour < 6) {
+    document.body.classList.add('night-theme');
+    document.getElementById('star-background').style.display = 'block';
+  }
+})();
+
+// Manual toggle
+const themeBtn = document.getElementById('theme-toggle');
+if (themeBtn) {
+  themeBtn.addEventListener('click', () => {
+    const body = document.body;
+    const stars = document.getElementById('star-background');
+    body.classList.toggle('night-theme');
+    stars.style.display = body.classList.contains('night-theme') ? 'block' : 'none';
+  });
 }
 </script>
 </body>
