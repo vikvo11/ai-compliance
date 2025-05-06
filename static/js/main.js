@@ -231,6 +231,37 @@ launcher.addEventListener('click', () => {
   chatBox.style.flexDirection = 'column';
   chatInput.disabled = false;
   sendBtn.disabled = false;
+  sendBtn.addEventListener('click', async () => {
+    const message = chatInput.value.trim();
+    if (!message) return;
+
+    const messagesContainer = chatBox.querySelector('.messages');
+    const userDiv = document.createElement('div');
+    userDiv.className = 'message';
+    userDiv.textContent = message;
+    messagesContainer.appendChild(userDiv);
+    chatInput.value = '';
+
+    try {
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      const data = await res.json();
+      const botDiv = document.createElement('div');
+      botDiv.className = 'message';
+      botDiv.textContent = data.response || data.error || 'No response';
+      messagesContainer.appendChild(botDiv);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    } catch (err) {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'message';
+      errDiv.textContent = 'Error contacting server';
+      messagesContainer.appendChild(errDiv);
+    }
+  });
+
   chatInput.focus();
 });
 
