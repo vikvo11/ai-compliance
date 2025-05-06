@@ -251,12 +251,6 @@ function removeTypingIndicator() {
   if (indicator) indicator.remove();
 }
 
-launcher.addEventListener('click', () => {
-  chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
-  chatBox.style.flexDirection = 'column';
-  chatInput.disabled = false;
-  sendBtn.disabled = false;
-  sendBtn.addEventListener('click', async () => {
     const message = chatInput.value.trim();
     if (!message) return;
 
@@ -289,7 +283,6 @@ launcher.addEventListener('click', () => {
 
   chatInput.focus();
 
-  chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendBtn.click();
