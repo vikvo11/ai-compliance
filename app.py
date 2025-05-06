@@ -16,7 +16,7 @@ db = SQLAlchemy(app)
 # Load OpenAI API key from cfg file
 config = configparser.ConfigParser()
 config.read('cfg/openai.cfg')
-openai.api_key = config.get('DEFAULT', 'OPENAI_API_KEY', fallback='')
+client = openai.OpenAI(api_key=config.get('DEFAULT', 'OPENAI_API_KEY', fallback=''))
 
 # Run table creation if needed
 with app.app_context():
@@ -176,14 +176,14 @@ def chat():
         return jsonify({'error': 'Empty message'}), 400
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant for telecom compliance."},
                 {"role": "user", "content": user_message}
             ]
         )
-        answer = response['choices'][0]['message']['content']
+        answer = response.choices[0].message.content
         return jsonify({"response": answer})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
