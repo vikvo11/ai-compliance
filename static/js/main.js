@@ -1,4 +1,5 @@
-/* JavaScript logic migrated from templates/index.html */
+/* main.js */
+/* Comments in English as requested. */
 
 /* --------------------------------
    DRAG-AND-DROP FOR CSV FILES
@@ -122,7 +123,6 @@ function toggleEdit(id) {
 /* --------------------------------
    TYPE EFFECT & TERMINAL SIMULATIONS
 ----------------------------------- */
-/* Comments in English as requested. */
 function typeInto(el, text, speed = 60, cb) {
   /* This function simulates typing into an element (placeholder or value). */
   let i = 0;
@@ -305,7 +305,7 @@ launcher.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
   chatBox.style.flexDirection = 'column';
   
-  // Ensure inputs are enabled each time
+  // Enable input and button
   chatInput.disabled = false;
   sendBtn.disabled = false;
 
@@ -313,14 +313,12 @@ launcher.addEventListener('click', () => {
   chatInput.focus();
 });
 
-/* IMPORTANT: Attach the click event to the send button directly,
-   not only inside the launcher click handler. 
-   This way, the event is always available once the DOM is ready. */
+/* Clicking on the send button */
 sendBtn.addEventListener('click', async () => {
   const message = chatInput.value.trim();
   if (!message) return;
 
-  // Show user message in chat
+  // Show user message in the chat
   addMessage(message, 'message');
 
   // Clear the input field
@@ -362,7 +360,8 @@ chatInput.addEventListener('keydown', (e) => {
   const hour = new Date().getHours();
   if (hour >= 19 || hour < 6) {
     document.body.classList.add('night-theme');
-    document.getElementById('star-background').style.display = 'block';
+    const stars = document.getElementById('star-background');
+    if (stars) stars.style.display = 'block';
   }
 })();
 
@@ -373,7 +372,7 @@ if (themeBtn) {
     const body = document.body;
     const stars = document.getElementById('star-background');
     const isNight = body.classList.toggle('night-theme');
-    stars.style.display = isNight ? 'block' : 'none';
+    if (stars) stars.style.display = isNight ? 'block' : 'none';
     localStorage.setItem('theme', isNight ? 'night' : 'light');
   });
 }
