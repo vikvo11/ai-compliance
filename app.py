@@ -17,6 +17,9 @@ db = SQLAlchemy(app)
 config = configparser.ConfigParser()
 config.read('cfg/openai.cfg')
 client = openai.OpenAI(api_key=config.get('DEFAULT', 'OPENAI_API_KEY', fallback=''))
+model = config.get('DEFAULT', 'model', fallback='gpt-3.5-turbo').strip()
+system_prompt = config.get('DEFAULT', 'system_prompt', fallback='You are a helpful assistant.').strip()
+
 
 # Run table creation if needed
 with app.app_context():
@@ -177,9 +180,9 @@ def chat():
 
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=model,
             messages=[
-                {"role": "system", "content": "You are a helpful assistant for telecom compliance."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ]
         )
