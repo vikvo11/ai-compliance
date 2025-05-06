@@ -224,9 +224,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const launcher = document.getElementById('chat-launcher');
 const chatBox = document.getElementById('chat-box');
+const chatInput = chatBox.querySelector('input[type=text]');
+const sendBtn = chatBox.querySelector('button.send');
 launcher.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
   chatBox.style.flexDirection = 'column';
+  chatInput.disabled = false;
+  sendBtn.disabled = false;
+  chatInput.focus();
 });
 
 (function autoTheme() {
