@@ -218,6 +218,51 @@ function crackGlass() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const chatBox = document.getElementById('chat-box');
+  const launcher = document.getElementById('chat-launcher');
+  const chatInput = chatBox.querySelector('textarea');
+  const sendBtn = chatBox.querySelector('button.send');
+  let isWaiting = false;
+
+  launcher.addEventListener('click', () => {
+    chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
+    chatBox.style.flexDirection = 'column';
+    chatInput.disabled = false;
+    sendBtn.disabled = false;
+    chatInput.focus();
+  });
+
+  sendBtn.addEventListener('click', async () => {
+    const message = chatInput.value.trim();
+    if (!message || isWaiting) return;
+    isWaiting = true;
+    addMessage(message);
+    chatInput.value = '';
+    addMessage('...', 'message typing');
+
+    try {
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      const data = await res.json();
+      removeTypingIndicator();
+      addMessage(data.response || data.error || 'No response');
+    } catch (err) {
+      removeTypingIndicator();
+      addMessage('Error contacting server');
+    }
+    isWaiting = false;
+  });
+
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendBtn.click();
+    }
+  });
+
   const aiCard = document.getElementById('ai-extract-block');
   if (aiCard) aiCard.addEventListener('click', crackGlass);
 });
