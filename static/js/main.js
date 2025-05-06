@@ -226,6 +226,18 @@ const launcher = document.getElementById('chat-launcher');
 const chatBox = document.getElementById('chat-box');
 const chatInput = chatBox.querySelector('textarea');
 const sendBtn = chatBox.querySelector('button.send');
+function addMessage(text, className = 'message') {
+  const div = document.createElement('div');
+  div.className = className;
+  div.textContent = text;
+  chatBox.querySelector('.messages').appendChild(div);
+  chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
+}
+function removeTypingIndicator() {
+  const typing = chatBox.querySelector('.message.typing');
+  if (typing) typing.remove();
+}
+
 let isWaiting = false;
 function addMessage(text, className = 'message') {
   const div = document.createElement('div');
