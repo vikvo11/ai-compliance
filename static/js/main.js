@@ -16,7 +16,6 @@ document.addEventListener('dragenter', (e) => {
   e.preventDefault();
   dragCounter++;
   document.getElementById('drop-area').style.display = 'flex';
-});
 function handleDrop(e) {
   e.preventDefault();
   dragCounter = 0;
@@ -55,7 +54,6 @@ document.querySelectorAll('.fade').forEach(el => {
     });
   }, { threshold: 0.3 });
   io.observe(el);
-});
 
 function showToast(message) {
   const container = document.getElementById('toast-container');
@@ -149,7 +147,6 @@ obs('#demo', () => {
     '→ Uploading to portal…',
     '→ Status: ✅ Filed Successfully!'
   ]);
-});
 
 obs('#actions', () => {
   printLines('term-extract', [
@@ -168,7 +165,6 @@ obs('#actions', () => {
     '→ Uploading PDF…',
     '→ Submission ID: #8842 ✅'
   ]), 1600);
-});
 
 function crackGlass() {
   const block = document.getElementById('ai-extract-block');
@@ -229,11 +225,9 @@ document.addEventListener('DOMContentLoaded', () => {
     chatBox.style.flexDirection = 'column';
     chatInput.disabled = false;
     sendBtn.disabled = false;
-    chatInput.focus();
   });
 
   sendBtn.addEventListener('click', async () => {
-    const message = chatInput.value.trim();
     if (!message || isWaiting) return;
     isWaiting = true;
     addMessage(message);
@@ -257,46 +251,33 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendBtn.click();
     }
   });
 
   const aiCard = document.getElementById('ai-extract-block');
   if (aiCard) aiCard.addEventListener('click', crackGlass);
-});
 
-const launcher = document.getElementById('chat-launcher');
-const chatBox = document.getElementById('chat-box');
-const chatInput = chatBox.querySelector('textarea');
-const sendBtn = chatBox.querySelector('button.send');
-function addMessage(text, className = 'message') {
   const div = document.createElement('div');
   div.className = className;
   div.textContent = text;
   chatBox.querySelector('.messages').appendChild(div);
   chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
 }
-function removeTypingIndicator() {
   const typing = chatBox.querySelector('.message.typing');
   if (typing) typing.remove();
 }
 
-let isWaiting = false;
-function addMessage(text, className = 'message') {
   const div = document.createElement('div');
   div.className = className;
   div.textContent = text;
   chatBox.querySelector('.messages').appendChild(div);
   chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
 }
-function removeTypingIndicator() {
   const indicator = document.querySelector('.message.typing');
   if (indicator) indicator.remove();
 }
 
-    const message = chatInput.value.trim();
     if (!message) return;
 
     const messagesContainer = chatBox.querySelector('.messages');
@@ -326,15 +307,11 @@ function removeTypingIndicator() {
     }
   });
 
-  chatInput.focus();
 
-    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendBtn.click();
     }
   });
 
-});
 
 (function autoTheme() {
   const hour = new Date().getHours();
