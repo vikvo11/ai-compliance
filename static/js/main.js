@@ -1,10 +1,13 @@
 /* JavaScript logic migrated from templates/index.html */
 
-// Drag-and-drop for CSV files
+/* --------------------------------
+   DRAG-AND-DROP FOR CSV FILES
+----------------------------------- */
 let dragCounter = 0;
 function handleDragOver(e) {
   e.preventDefault();
 }
+
 function handleDragLeave(e) {
   e.preventDefault();
   dragCounter--;
@@ -12,10 +15,13 @@ function handleDragLeave(e) {
     document.getElementById('drop-area').style.display = 'none';
   }
 }
+
 document.addEventListener('dragenter', (e) => {
   e.preventDefault();
   dragCounter++;
   document.getElementById('drop-area').style.display = 'flex';
+});
+
 function handleDrop(e) {
   e.preventDefault();
   dragCounter = 0;
@@ -29,11 +35,11 @@ function handleDrop(e) {
       method: 'POST',
       body: formData
     })
-    .then((resp) => {
-      if (!resp.ok) throw new Error('Upload failed');
-      location.reload();
-    })
-    .catch(() => alert('Upload failed'));
+      .then((resp) => {
+        if (!resp.ok) throw new Error('Upload failed');
+        location.reload();
+      })
+      .catch(() => alert('Upload failed'));
   } else {
     alert('Please drop a valid CSV file.');
   }
@@ -44,6 +50,9 @@ function toggleInvoices() {
   tbl.style.display = (tbl.style.display === 'none') ? 'block' : 'none';
 }
 
+/* --------------------------------
+   FADE-IN ANIMATION ON SCROLL
+----------------------------------- */
 document.querySelectorAll('.fade').forEach(el => {
   const io = new IntersectionObserver(entries => {
     entries.forEach(entry => {
@@ -54,19 +63,27 @@ document.querySelectorAll('.fade').forEach(el => {
     });
   }, { threshold: 0.3 });
   io.observe(el);
+});
 
+/* --------------------------------
+   TOAST NOTIFICATIONS
+----------------------------------- */
 function showToast(message) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.classList.add('toast');
   toast.textContent = message;
   container.appendChild(toast);
+
   setTimeout(() => {
     toast.style.opacity = '0';
     setTimeout(() => container.removeChild(toast), 800);
   }, 3000);
 }
 
+/* --------------------------------
+   SAVE INVOICE
+----------------------------------- */
 async function saveInvoice(event, invoiceId) {
   event.preventDefault();
   try {
@@ -77,13 +94,19 @@ async function saveInvoice(event, invoiceId) {
       body: formData
     });
     if (!response.ok) throw new Error('Network response was not ok');
+
     const data = await response.json();
+
+    // Update invoice details in the table
     document.getElementById(`invoice-${invoiceId}-client`).textContent = data.client_name;
     document.getElementById(`invoice-${invoiceId}-invoiceID`).textContent = data.invoice_id;
     document.getElementById(`invoice-${invoiceId}-amount`).textContent = `$${parseFloat(data.amount).toFixed(2)}`;
     document.getElementById(`invoice-${invoiceId}-due`).textContent = data.date_due;
     document.getElementById(`invoice-${invoiceId}-status`).textContent = data.status;
+
+    // Hide the edit row
     document.getElementById(`edit-row-${invoiceId}`).style.display = 'none';
+
     showToast('Invoice updated successfully!');
   } catch (err) {
     console.error(err);
@@ -96,18 +119,30 @@ function toggleEdit(id) {
   row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
 }
 
+/* --------------------------------
+   TYPE EFFECT & TERMINAL SIMULATIONS
+----------------------------------- */
+/* Comments in English as requested. */
 function typeInto(el, text, speed = 60, cb) {
+  /* This function simulates typing into an element (placeholder or value). */
   let i = 0;
   (function t() {
     if (i < text.length) {
-      el.placeholder ? el.placeholder = text.slice(0, i + 1) : el.value += text[i];
+      if (el.placeholder) {
+        el.placeholder = text.slice(0, i + 1);
+      } else {
+        el.value += text[i];
+      }
       i++;
       setTimeout(t, speed);
-    } else if (cb) cb();
+    } else if (cb) {
+      cb();
+    }
   })();
 }
 
 function printLines(id, lines, delay = 900) {
+  /* This function prints lines one by one, simulating terminal output. */
   const t = document.getElementById(id);
   let i = 0;
   (function n() {
@@ -122,6 +157,8 @@ function printLines(id, lines, delay = 900) {
 }
 
 const obs = (sel, cb) => {
+  /* This function observes when an element enters the viewport 
+     and then triggers a callback. */
   const el = document.querySelector(sel);
   if (!el) return;
   const io = new IntersectionObserver(e => {
@@ -133,6 +170,7 @@ const obs = (sel, cb) => {
   io.observe(el);
 };
 
+/* Trigger animations when elements come into view */
 obs('#demo', () => {
   const companyField = document.getElementById('companyField');
   const reportField = document.getElementById('reportField');
@@ -147,6 +185,7 @@ obs('#demo', () => {
     '→ Uploading to portal…',
     '→ Status: ✅ Filed Successfully!'
   ]);
+});
 
 obs('#actions', () => {
   printLines('term-extract', [
@@ -165,24 +204,37 @@ obs('#actions', () => {
     '→ Uploading PDF…',
     '→ Submission ID: #8842 ✅'
   ]), 1600);
+});
 
+/* --------------------------------
+   CRACK GLASS ANIMATION
+----------------------------------- */
 function crackGlass() {
+  /* Visual "cracked glass" effect on click */
   const block = document.getElementById('ai-extract-block');
   const canvas = document.getElementById('crack-effect');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+
   canvas.style.transition = '';
   canvas.style.opacity = '1';
   canvas.style.display = 'block';
   canvas.width = 300;
   canvas.height = 200;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Vibrate if supported
   if (navigator.vibrate) navigator.vibrate([100, 50, 100, 30, 100]);
+
+  // Shake the card
   block.classList.add('vibrate');
   setTimeout(() => block.classList.remove('vibrate'), 700);
+
+  // Draw cracking lines
   const centerX = canvas.width / 2;
   const centerY = canvas.height / 2;
+
   for (let i = 0; i < 24; i++) {
     const angle = (Math.PI * 2 * i) / 24;
     const length = 50 + Math.random() * 100;
@@ -195,6 +247,8 @@ function crackGlass() {
     ctx.lineWidth = 0.5 + Math.random() * 2;
     ctx.stroke();
   }
+
+  // Draw random arcs
   for (let r = 20; r <= 100; r += 20) {
     ctx.beginPath();
     ctx.arc(centerX, centerY, r + Math.random() * 5, 0, Math.PI * 2);
@@ -202,6 +256,8 @@ function crackGlass() {
     ctx.lineWidth = 0.3 + Math.random();
     ctx.stroke();
   }
+
+  // Fade out the canvas
   setTimeout(() => {
     canvas.style.transition = 'opacity 0.8s ease';
     canvas.style.opacity = '0';
@@ -214,106 +270,95 @@ function crackGlass() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const chatBox = document.getElementById('chat-box');
-  const launcher = document.getElementById('chat-launcher');
-  const chatInput = chatBox.querySelector('textarea');
-  const sendBtn = chatBox.querySelector('button.send');
-  let isWaiting = false;
-
-  launcher.addEventListener('click', () => {
-    chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
-    chatBox.style.flexDirection = 'column';
-    chatInput.disabled = false;
-    sendBtn.disabled = false;
-  });
-
-  sendBtn.addEventListener('click', async () => {
-    if (!message || isWaiting) return;
-    isWaiting = true;
-    addMessage(message);
-    chatInput.value = '';
-    addMessage('...', 'message typing');
-
-    try {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
-      });
-      const data = await res.json();
-      removeTypingIndicator();
-      addMessage(data.response || data.error || 'No response');
-    } catch (err) {
-      removeTypingIndicator();
-      addMessage('Error contacting server');
-    }
-    isWaiting = false;
-  });
-
-  chatInput.addEventListener('keydown', (e) => {
-      e.preventDefault();
-    }
-  });
-
+  /* Attach crackGlass to the card after the DOM is loaded */
   const aiCard = document.getElementById('ai-extract-block');
   if (aiCard) aiCard.addEventListener('click', crackGlass);
+});
 
+/* --------------------------------
+   CHAT LAUNCHER & SEND BUTTON
+----------------------------------- */
+const launcher = document.getElementById('chat-launcher');
+const chatBox = document.getElementById('chat-box');
+const chatInput = chatBox.querySelector('textarea');
+const sendBtn = chatBox.querySelector('button.send');
+
+/* This function appends a message to the chat */
+function addMessage(text, className = 'message') {
   const div = document.createElement('div');
   div.className = className;
   div.textContent = text;
   chatBox.querySelector('.messages').appendChild(div);
-  chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
-}
-  const typing = chatBox.querySelector('.message.typing');
-  if (typing) typing.remove();
+  chatBox.querySelector('.messages').scrollTop = 
+    chatBox.querySelector('.messages').scrollHeight;
 }
 
-  const div = document.createElement('div');
-  div.className = className;
-  div.textContent = text;
-  chatBox.querySelector('.messages').appendChild(div);
-  chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
-}
+/* Remove the 'typing' indicator if it exists */
+function removeTypingIndicator() {
   const indicator = document.querySelector('.message.typing');
   if (indicator) indicator.remove();
 }
 
-    if (!message) return;
+/* Clicking on the launcher toggles chat box visibility */
+launcher.addEventListener('click', () => {
+  // Toggle display of chat box
+  chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
+  chatBox.style.flexDirection = 'column';
+  
+  // Ensure inputs are enabled each time
+  chatInput.disabled = false;
+  sendBtn.disabled = false;
 
-    const messagesContainer = chatBox.querySelector('.messages');
-    const userDiv = document.createElement('div');
-    userDiv.className = 'message';
-    userDiv.textContent = message;
-    messagesContainer.appendChild(userDiv);
-    chatInput.value = '';
+  // Focus on the input so user can start typing
+  chatInput.focus();
+});
 
-    try {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
-      });
-      const data = await res.json();
-      const botDiv = document.createElement('div');
-      botDiv.className = 'message';
-      botDiv.textContent = data.response || data.error || 'No response';
-      messagesContainer.appendChild(botDiv);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    } catch (err) {
-      const errDiv = document.createElement('div');
-      errDiv.className = 'message';
-      errDiv.textContent = 'Error contacting server';
-      messagesContainer.appendChild(errDiv);
-    }
-  });
+/* IMPORTANT: Attach the click event to the send button directly,
+   not only inside the launcher click handler. 
+   This way, the event is always available once the DOM is ready. */
+sendBtn.addEventListener('click', async () => {
+  const message = chatInput.value.trim();
+  if (!message) return;
 
+  // Show user message in chat
+  addMessage(message, 'message');
 
-      e.preventDefault();
-    }
-  });
+  // Clear the input field
+  chatInput.value = '';
 
+  try {
+    // Send the message to the server
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
 
+    const data = await res.json();
+    // Display response from server
+    addMessage(data.response || data.error || 'No response', 'message');
+    chatBox.querySelector('.messages').scrollTop = 
+      chatBox.querySelector('.messages').scrollHeight;
+  } catch (err) {
+    // In case of error
+    addMessage('Error contacting server', 'message');
+  }
+});
+
+/* Allow sending message with Enter (without Shift) */
+chatInput.addEventListener('keydown', (e) => {
+  // If user presses Enter and not Shift+Enter, then we simulate a click on Send
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendBtn.click();
+  }
+});
+
+/* --------------------------------
+   AUTO THEME (LIGHT / NIGHT)
+----------------------------------- */
 (function autoTheme() {
+  /* Automatically enable night theme based on current time */
   const hour = new Date().getHours();
   if (hour >= 19 || hour < 6) {
     document.body.classList.add('night-theme');
@@ -321,6 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 })();
 
+/* Theme toggle button */
 const themeBtn = document.getElementById('theme-toggle');
 if (themeBtn) {
   themeBtn.addEventListener('click', () => {
