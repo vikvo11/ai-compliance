@@ -12,3 +12,6 @@ __pycache__/
 data/
 tmp/
 tmp/**
+
+# Local config
+cfg/openai.cfg
