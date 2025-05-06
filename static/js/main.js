@@ -226,6 +226,19 @@ const launcher = document.getElementById('chat-launcher');
 const chatBox = document.getElementById('chat-box');
 const chatInput = chatBox.querySelector('textarea');
 const sendBtn = chatBox.querySelector('button.send');
+let isWaiting = false;
+function addMessage(text, className = 'message') {
+  const div = document.createElement('div');
+  div.className = className;
+  div.textContent = text;
+  chatBox.querySelector('.messages').appendChild(div);
+  chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
+}
+function removeTypingIndicator() {
+  const indicator = document.querySelector('.message.typing');
+  if (indicator) indicator.remove();
+}
+
 launcher.addEventListener('click', () => {
   chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
   chatBox.style.flexDirection = 'column';
