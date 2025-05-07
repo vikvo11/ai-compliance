@@ -7,6 +7,9 @@ import pandas as pd
 from sqlalchemy import inspect
 import openai
 import configparser
+import time
+import json
+
 
 
 app = Flask(__name__)
@@ -18,7 +21,9 @@ config = configparser.ConfigParser()
 config.read('cfg/openai.cfg')
 client = openai.OpenAI(api_key=config.get('DEFAULT', 'OPENAI_API_KEY', fallback=''))
 model = config.get('DEFAULT', 'model', fallback='gpt-3.5-turbo').strip()
-system_prompt = config.get('DEFAULT', 'system_prompt', fallback='You are a helpful assistant.').strip()
+system_prompt = config.get('DEFAULT', 'system_prompt', fallback='You are a helpful assistant.')
+assistant_id = config.get('DEFAULT', 'assistant_id', fallback='').strip()
+.strip()
 
 
 # Run table creation if needed
@@ -47,6 +52,20 @@ class Invoice(db.Model):
 
 
 # --- Routes ---
+# --- Assistant Function Call ---
+def get_invoice_by_id(invoice_id):
+    invoice = Invoice.query.filter_by(invoice_id=invoice_id).first()
+    if invoice:
+        return {
+            "invoice_id": invoice.invoice_id,
+            "amount": invoice.amount,
+            "date_due": invoice.date_due,
+            "status": invoice.status,
+            "client_name": invoice.client.name,
+            "client_email": invoice.client.email
+        }
+    return {"error": f"Invoice {invoice_id} not found"}
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     """
