@@ -267,9 +267,6 @@ def chat():
     }]
 )
 
-                run = client.beta.threads.runs.create(
-                    thread_id=thread_id,
-                    assistant_id=assistant_id
                 )
             elif run_status.status in ("failed", "cancelled"):
                 return jsonify({"error": f"Run failed: {run_status.status}"}), 500
