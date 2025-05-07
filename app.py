@@ -6,7 +6,6 @@
 import os, time, json, queue, threading, requests, configparser
 from collections.abc import Sequence, Generator
 from typing import Any
-
 from flask import Flask, render_template, request, redirect, flash, jsonify, session, Response
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
@@ -57,13 +56,14 @@ with app.app_context():
     db.create_all()
 
 # -------------------------------------------------------------------
-# Assistant helper functions (tool calls)
+# Assistant helper functions
 # -------------------------------------------------------------------
 def get_current_weather(location: str, unit: str = "celsius") -> str:
     try:
         geo = requests.get("https://geocoding-api.open-meteo.com/v1/search",
                            params={"name": location, "count": 1}, timeout=5).json().get("results")
-        if not geo: return f"Location '{location}' not found"
+        if not geo:
+            return f"Location '{location}' not found"
         lat, lon = geo[0]["latitude"], geo[0]["longitude"]
         cw = requests.get("https://api.open-meteo.com/v1/forecast",
                           params={"latitude": lat, "longitude": lon, "current_weather": True},
@@ -76,25 +76,28 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
 def get_invoice_by_id(invoice_id: str) -> dict:
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     return {"error": f"Invoice {invoice_id} not found"} if not inv else {
-        "invoice_id": inv.invoice_id, "amount": inv.amount, "date_due": inv.date_due,
-        "status": inv.status, "client_name": inv.client.name, "client_email": inv.client.email,
+        "invoice_id": inv.invoice_id, "amount": inv.amount,
+        "date_due": inv.date_due, "status": inv.status,
+        "client_name": inv.client.name, "client_email": inv.client.email,
     }
 
 TOOLS = [
     {"type": "function", "function": {
-        "name": "get_current_weather", "description": "Get weather",
+        "name": "get_current_weather",
+        "description": "Get weather",
         "parameters": {"type": "object",
             "properties": {"location": {"type": "string"}, "unit": {"type": "string"}},
             "required": ["location"]}}},
     {"type": "function", "function": {
-        "name": "get_invoice_by_id", "description": "Lookup invoice",
+        "name": "get_invoice_by_id",
+        "description": "Lookup invoice",
         "parameters": {"type": "object",
             "properties": {"invoice_id": {"type": "string"}},
             "required": ["invoice_id"]}}},
 ]
 
 # -------------------------------------------------------------------
-# Utility helpers
+# Helpers
 # -------------------------------------------------------------------
 def ensure_thread() -> str:
     if "thread_id" not in session:
@@ -115,7 +118,7 @@ def handle_tool_calls(thread_id: str, run_id: str, calls: Sequence[Any]) -> None
                                                  tool_outputs=outs)
 
 # -------------------------------------------------------------------
-# Routes – UI helpers (index / delete / edit / export) unchanged
+# Routes — UI helpers (index / delete / edit)
 # -------------------------------------------------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -125,13 +128,13 @@ def index():
             flash("Please upload a valid CSV file."); return redirect(request.url)
         df = pd.read_csv(f)
         for _, r in df.iterrows():
-            client_row = Client.query.filter_by(name=r["client_name"]).first()
-            if not client_row:
-                client_row = Client(name=r["client_name"], email=r.get("client_email"))
-                db.session.add(client_row); db.session.flush()
+            cl = Client.query.filter_by(name=r["client_name"]).first()
+            if not cl:
+                cl = Client(name=r["client_name"], email=r.get("client_email"))
+                db.session.add(cl); db.session.flush()
             db.session.add(Invoice(invoice_id=r["invoice_id"], amount=r["amount"],
                                    date_due=r["date_due"], status=r["status"],
-                                   client_id=client_row.id))
+                                   client_id=cl.id))
         db.session.commit(); flash("Invoices uploaded."); return redirect("/")
     return render_template("index.html", invoices=Invoice.query.all())
 
@@ -149,65 +152,69 @@ def edit_invoice(invoice_id:int):
     return jsonify({"client_name": inv.client.name, "invoice_id": inv.invoice_id,
                     "amount": inv.amount, "date_due": inv.date_due, "status": inv.status})
 
-@app.route("/export"); @app.route("/export/<int:invoice_id>")
-def export_invoice(invoice_id:int|None=None):
+# ---- fixed decorator block -------------------------------------------------
+@app.route("/export")
+@app.route("/export/<int:invoice_id>")
+def export_invoice(invoice_id:int | None = None):
     invs = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
-    csv = pd.DataFrame([{"client_name":i.client.name,"client_email":i.client.email,
-                         "invoice_id":i.invoice_id,"amount":i.amount,
-                         "date_due":i.date_due,"status":i.status} for i in invs]).to_csv(index=False)
+    csv = pd.DataFrame([{"client_name": i.client.name, "client_email": i.client.email,
+                         "invoice_id": i.invoice_id, "amount": i.amount,
+                         "date_due": i.date_due, "status": i.status} for i in invs]).to_csv(index=False)
     fname = f"invoice_{invoice_id or 'all'}.csv"
-    return (csv, 200, {"Content-Type":"text/csv",
-                       "Content-Disposition":f'attachment; filename="{fname}"'})
+    return (csv, 200, {"Content-Type": "text/csv",
+                       "Content-Disposition": f'attachment; filename="{fname}"'})
 
 # -------------------------------------------------------------------
-# Classic blocking /chat
+# Blocking /chat endpoint
 # -------------------------------------------------------------------
 @app.route("/chat", methods=["POST"])
 def chat_sync():
     user_msg = (request.json or {}).get("message","").strip()
-    if not user_msg: return jsonify({"error":"Empty message"}), 400
+    if not user_msg: return jsonify({"error":"Empty message"}),400
     thread_id = ensure_thread()
     client.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_msg)
     run = client.beta.threads.runs.create(thread_id=thread_id, assistant_id=ASSISTANT_ID,
                                           model=MODEL, tools=TOOLS)
     while True:
         st = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-        if st.status=="requires_action":
+        if st.status == "requires_action":
             handle_tool_calls(thread_id, run.id, st.required_action.submit_tool_outputs.tool_calls)
-        elif st.status=="completed": break
+        elif st.status == "completed":
+            break
         elif st.status in {"failed","cancelled","expired"}:
-            return jsonify({"error":f"Run {st.status}"}),500
+            return jsonify({"error": f"Run {st.status}"}), 500
         time.sleep(0.4)
     reply = client.beta.threads.messages.list(thread_id=thread_id, limit=1).data[0].content[0].text.value
-    return jsonify({"response":reply})
+    return jsonify({"response": reply})
 
 # -------------------------------------------------------------------
-# Streaming SSE
+# Streaming SSE endpoint
 # -------------------------------------------------------------------
 class SSEHandler(AssistantEventHandler):
-    def __init__(self, q:queue.Queue, thread_id:str): super().__init__(); self.q=q; self.tid=thread_id
-    def on_text_delta(self, delta, snapshot):
-        self.q.put(getattr(delta,"delta", getattr(delta,"value","")))
-    def on_tool_call(self,t): handle_tool_calls(self.tid, t.run_id, [t])
-    def on_end(self,_): self.q.put(None)
+    def __init__(self, q:queue.Queue, tid:str):
+        super().__init__(); self.q=q; self.tid=tid
+    def on_text_delta(self, delta, _snapshot):
+        self.q.put(getattr(delta, "delta", getattr(delta, "value", "")))
+    def on_tool_call(self, t): handle_tool_calls(self.tid, t.run_id, [t])
+    def on_end(self, _): self.q.put(None)
 
-def sse_gen(q:queue.Queue)->Generator[bytes,None,None]:
+def sse_gen(q:queue.Queue) -> Generator[bytes,None,None]:
     while True:
         tok = q.get()
-        if tok is None: yield b"event: done\ndata: [DONE]\n\n"; break
+        if tok is None:
+            yield b"event: done\ndata: [DONE]\n\n"; break
         yield f"data: {tok}\n\n".encode()
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    user_msg=(request.json or {}).get("message","").strip()
+    user_msg = (request.json or {}).get("message","").strip()
     if not user_msg: return jsonify({"error":"Empty message"}),400
-    thread_id=ensure_thread()
+    thread_id = ensure_thread()
     client.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_msg)
 
-    q:queue.Queue[str|None]=queue.Queue()
-    handler=SSEHandler(q, thread_id)
+    q:queue.Queue[str|None] = queue.Queue()
+    handler = SSEHandler(q, thread_id)
 
-    # Run streaming in background so Flask can immediately return Response
     def consume():
         for _ in client.beta.threads.runs.stream(thread_id=thread_id,
                                                  assistant_id=ASSISTANT_ID,
