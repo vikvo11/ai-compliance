@@ -266,7 +266,6 @@ def chat():
         "output": output
     }]
 )
-                )
             elif run_status.status in ("failed", "cancelled"):
                 return jsonify({"error": f"Run failed: {run_status.status}"}), 500
             time.sleep(1)
