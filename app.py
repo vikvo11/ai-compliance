@@ -9,14 +9,14 @@ import json
 import queue
 import requests
 import configparser
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
+from typing import Any
 
 from flask import (
     Flask, render_template, request, redirect,
     flash, jsonify, session, Response
 )
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import inspect
 import pandas as pd
 import openai
 from openai import AssistantEventHandler
@@ -25,7 +25,6 @@ from openai import AssistantEventHandler
 # Basic setup
 # -------------------------------------------------------------------
 
-# Ensure data dir for SQLite exists
 os.makedirs("/app/data", exist_ok=True)
 
 app = Flask(__name__)
@@ -241,8 +240,11 @@ def ensure_thread() -> str:
         session["thread_id"] = client.beta.threads.create().id
     return session["thread_id"]
 
-def handle_tool_calls(thread_id: str, run_id: str,
-                      tool_calls: list[openai.types.assistant_tool_call.AssistantToolCall]) -> None:
+def handle_tool_calls(
+    thread_id: str,
+    run_id: str,
+    tool_calls: Sequence[Any],   # compatible with any openai-python version
+) -> None:
     """Answer each requested tool, then post outputs."""
     outputs = []
     for call in tool_calls:
@@ -309,19 +311,14 @@ class SSEHandler(AssistantEventHandler):
         self._q = q
         self._thread_id = thread_id
 
-    # === text delta ===
-    def on_text_delta(self, delta, snapshot):
+    def on_text_delta(self, delta, snapshot):     # noqa: D401
         self._q.put(delta.value)
 
-    # === tool call ===
-    def on_tool_call(self, tcall):
-        handle_tool_calls(self._thread_id,
-                          tcall.run_id,
-                          [tcall])
+    def on_tool_call(self, tcall):               # noqa: D401
+        handle_tool_calls(self._thread_id, tcall.run_id, [tcall])
 
-    # === run end ===
-    def on_end(self, _run):
-        self._q.put(None)          # sentinel → stream finished
+    def on_end(self, _run):                      # noqa: D401
+        self._q.put(None)                        # sentinel → stream finished
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
     """Yield tokens as SSE lines."""
