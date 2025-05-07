@@ -321,7 +321,7 @@ def wait_stream(manager: Any):
         manager.wait_until_done()
     elif hasattr(manager, "wait"):
         manager.wait()
-    else:   # <= 1.12 iterator
+    elif hasattr(manager, "__iter__"):   # ≤ 1.12
         for _ in manager:
             pass
 
