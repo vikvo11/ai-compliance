@@ -291,6 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chatBox.style.flexDirection = 'column';
     chatBox.style.width = '600px';
     chatBox.style.height = '80vh';
+  chatBox.querySelector('.messages').style.maxHeight = '';
   }
 });
   }
