@@ -364,14 +364,19 @@ def chat_sync():
 class SSEHandler(AssistantEventHandler):
     def __init__(self, q, tid):
         super().__init__()
-        self.q   = q
-        self.tid = tid
+        self.q = q; self.tid = tid
 
     def on_event(self, event):
-        if event.event == "thread.message.delta":
-            for part in (event.data.delta.content or []):
-                if part.type == "text" and part.text and part.text.value:
+        print("[DEBUG] on_event:", event.event, flush=True)
+        # P2 – универсальная проверка для любых версий
+        delta = getattr(event.data, "delta", None)
+        if delta and getattr(delta, "content", None):
+            for part in delta.content:
+                if part.type == "text":
                     self.q.put(part.text.value)
+        # «на всякий»: если SDK старый
+        if getattr(event.data, "text", None):
+            self.q.put(event.data.text.value)
 
     def on_tool_call(self, call):
         handle_tool_calls(self.tid, call.run_id, [call])
@@ -379,9 +384,6 @@ class SSEHandler(AssistantEventHandler):
     def on_end(self, _run=None):
         self.q.put(None)
 
-    def on_text_delta(self, delta, _snapshot=None):
-        txt = getattr(delta, "text", None)
-        self.q.put(txt.value if txt else str(delta))
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
