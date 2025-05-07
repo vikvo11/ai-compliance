@@ -451,6 +451,7 @@ def chat_stream():
             assistant_id=ASSISTANT_ID,
             **({"model": MODEL} if MODEL else {}),
             tools=TOOLS,
+            stream=True, 
             event_handler=handler,
         )
         wait_stream(stream_mgr)
