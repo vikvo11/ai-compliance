@@ -1,298 +1,369 @@
+# app.py
+# All comments are in English, as requested.
+
 import os
-os.makedirs("/app/data", exist_ok=True)
-
-from flask import Flask, render_template, request, redirect, flash, jsonify
-from flask import session
-
-from flask_sqlalchemy import SQLAlchemy
-import pandas as pd
-from sqlalchemy import inspect
-import openai
-import configparser
 import time
 import json
 import requests
+import configparser
+from flask import (
+    Flask, render_template, request, redirect,
+    flash, jsonify, session
+)
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect
+import pandas as pd
+import openai
 
+# -------------------------------------------------------------------
+# Basic setup
+# -------------------------------------------------------------------
 
-
+# Ensure the data directory exists (for SQLite file)
+os.makedirs("/app/data", exist_ok=True)
 
 app = Flask(__name__)
-app.secret_key = 'replace-this-secret'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////app/data/data.db'
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
+
+# SQLAlchemy configuration
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////app/data/data.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
-# Load OpenAI API key from cfg file
-config = configparser.ConfigParser()
-config.read('cfg/openai.cfg')
-client = openai.OpenAI(api_key=config.get('DEFAULT', 'OPENAI_API_KEY', fallback=''))
-model = config.get('DEFAULT', 'model', fallback='gpt-3.5-turbo').strip()
-system_prompt = config.get('DEFAULT', 'system_prompt', fallback='You are a helpful assistant.')
-assistant_id = config.get('DEFAULT', 'assistant_id', fallback='').strip()
 
+# -------------------------------------------------------------------
+# OpenAI configuration
+# -------------------------------------------------------------------
 
-# Run table creation if needed
-with app.app_context():
-    inspector = inspect(db.engine)
-    if not inspector.has_table("invoice"):
-        print("[INFO] Creating tables...")
-        db.create_all()
+cfg = configparser.ConfigParser()
+cfg.read("cfg/openai.cfg")  # falls back to env vars if file is absent
 
-# --- Models ---
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
+MODEL           = cfg.get("DEFAULT", "model"         , fallback="gpt-3.5-turbo").strip()
+SYSTEM_PROMPT   = cfg.get("DEFAULT", "system_prompt" , fallback="You are a helpful assistant.")
+ASSISTANT_ID    = cfg.get("DEFAULT", "assistant_id"  , fallback="").strip()
+
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+# -------------------------------------------------------------------
+# Database models
+# -------------------------------------------------------------------
+
 class Client(db.Model):
-    __tablename__ = 'client'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(128), unique=True, nullable=False)
+    __tablename__ = "client"
+
+    id    = db.Column(db.Integer, primary_key=True)
+    name  = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128), nullable=True)
-    invoices = db.relationship('Invoice', backref='client', lazy=True)
+
+    invoices = db.relationship(
+        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
+    )
 
 class Invoice(db.Model):
-    __tablename__ = 'invoice'
-    id = db.Column(db.Integer, primary_key=True)
+    __tablename__ = "invoice"
+
+    id         = db.Column(db.Integer, primary_key=True)
     invoice_id = db.Column(db.String(64), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    date_due = db.Column(db.String(64), nullable=False)
-    status = db.Column(db.String(32), nullable=False)
-    client_id = db.Column(db.Integer, db.ForeignKey('client.id'), nullable=False)
+    amount     = db.Column(db.Float, nullable=False)
+    date_due   = db.Column(db.String(64), nullable=False)
+    status     = db.Column(db.String(32), nullable=False)
 
+    client_id  = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
 
-# --- Routes ---
-# --- Assistant Function Call ---
-def get_current_weather(location: str, unit: str = "celsius"):
+# Create tables if they do not exist
+with app.app_context():
+    db.create_all()
+
+# -------------------------------------------------------------------
+# Helper functions (tooling for the assistant)
+# -------------------------------------------------------------------
+
+def get_current_weather(location: str, unit: str = "celsius") -> str:
+    """
+    Very simple weather lookup using open-meteo.com APIs.
+    """
     try:
-        geo_resp = requests.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": location})
-        geo_resp.raise_for_status()
-        geo_data = geo_resp.json().get("results")
-        if not geo_data:
+        geo_r = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1},
+            timeout=5,
+        )
+        geo_r.raise_for_status()
+        results = geo_r.json().get("results")
+        if not results:
             return f"Location '{location}' not found."
 
-        lat = geo_data[0]["latitude"]
-        lon = geo_data[0]["longitude"]
+        lat = results[0]["latitude"]
+        lon = results[0]["longitude"]
 
-        weather_resp = requests.get("https://api.open-meteo.com/v1/forecast", params={
-            "latitude": lat,
-            "longitude": lon,
-            "current_weather": "true"
-        })
-        weather_resp.raise_for_status()
-        weather = weather_resp.json().get("current_weather", {})
+        weather_r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current_weather": True,
+            },
+            timeout=5,
+        )
+        weather_r.raise_for_status()
+        cw = weather_r.json().get("current_weather", {})
 
-        temp = weather.get("temperature")
-        wind = weather.get("windspeed")
-        time_str = weather.get("time")
+        temp   = cw.get("temperature")
+        wind   = cw.get("windspeed")
+        time_s = cw.get("time")
 
-        return f"The temperature in {location} is {temp}°C with wind speed {wind} m/s at {time_str}."
+        return (
+            f"The temperature in {location} is {temp} °C with wind speed "
+            f"{wind} m/s at {time_s}."
+        )
+    except Exception as exc:
+        return f"Error fetching weather: {exc}"
 
-    except Exception as e:
-        return f"Error fetching weather: {str(e)}"
+def get_invoice_by_id(invoice_id: str) -> dict:
+    """
+    Small helper so the assistant can fetch an invoice by external ID.
+    """
+    inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
+    if not inv:
+        return {"error": f"Invoice {invoice_id} not found"}
 
-def get_invoice_by_id(invoice_id):
-    invoice = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    if invoice:
-        return {
-            "invoice_id": invoice.invoice_id,
-            "amount": invoice.amount,
-            "date_due": invoice.date_due,
-            "status": invoice.status,
-            "client_name": invoice.client.name,
-            "client_email": invoice.client.email
-        }
-    return {"error": f"Invoice {invoice_id} not found"}
+    return {
+        "invoice_id" : inv.invoice_id,
+        "amount"     : inv.amount,
+        "date_due"   : inv.date_due,
+        "status"     : inv.status,
+        "client_name": inv.client.name,
+        "client_email": inv.client.email,
+    }
 
-@app.route('/', methods=['GET', 'POST'])
+# -------------------------------------------------------------------
+# Routes
+# -------------------------------------------------------------------
+
+@app.route("/", methods=["GET", "POST"])
 def index():
     """
-    GET: Show all invoices
-    POST: Upload a CSV file with invoices (hidden in the UI, but still functional)
+    GET  – show all invoices
+    POST – (hidden in UI) upload CSV with invoices
     """
-    if request.method == 'POST':
-        file = request.files.get('csv_file')
-        if not file or not file.filename.endswith('.csv'):
-            flash('Please upload a valid CSV file.')
+    if request.method == "POST":
+        f = request.files.get("csv_file")
+        if not f or not f.filename.endswith(".csv"):
+            flash("Please upload a valid CSV file.")
             return redirect(request.url)
 
-        df = pd.read_csv(file)
+        df = pd.read_csv(f)
         for _, row in df.iterrows():
-            client_name = row['client_name']
-            client_email = row.get('client_email')
-
-            # Check if client already exists
-            client = Client.query.filter_by(name=client_name).first()
+            client = Client.query.filter_by(name=row["client_name"]).first()
             if not client:
-                client = Client(name=client_name, email=client_email)
+                client = Client(
+                    name=row["client_name"],
+                    email=row.get("client_email"),
+                )
                 db.session.add(client)
-                db.session.commit()
+                db.session.flush()  # ensures client.id is available
 
-            # Create the invoice record
             invoice = Invoice(
-                invoice_id=row['invoice_id'],
-                amount=row['amount'],
-                date_due=row['date_due'],
-                status=row['status'],
-                client_id=client.id
+                invoice_id=row["invoice_id"],
+                amount=row["amount"],
+                date_due=row["date_due"],
+                status=row["status"],
+                client_id=client.id,
             )
             db.session.add(invoice)
 
         db.session.commit()
-        flash('Invoices uploaded successfully.')
-        return redirect('/')
+        flash("Invoices uploaded successfully.")
+        return redirect("/")
 
     invoices = Invoice.query.all()
-    return render_template('index.html', invoices=invoices)
+    # Minimal stub template usage – you can style it however you like.
+    return render_template("index.html", invoices=invoices)
 
-
-@app.route('/delete/<int:invoice_id>', methods=['POST'])
-def delete_invoice(invoice_id):
-    """
-    POST: Delete a specific invoice by ID.
-    """
-    invoice = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(invoice)
+@app.route("/delete/<int:invoice_id>", methods=["POST"])
+def delete_invoice(invoice_id: int):
+    inv = Invoice.query.get_or_404(invoice_id)
+    db.session.delete(inv)
     db.session.commit()
-    flash('Invoice deleted successfully.')
-    return redirect('/')
+    flash("Invoice deleted successfully.")
+    return redirect("/")
 
+@app.route("/edit/<int:invoice_id>", methods=["POST"])
+def edit_invoice(invoice_id: int):
+    inv = Invoice.query.get_or_404(invoice_id)
 
-@app.route('/edit/<int:invoice_id>', methods=['POST'])
-def edit_invoice(invoice_id):
-    """
-    POST: Update a specific invoice. Returns JSON so the front-end can update without reloading.
-    Expecting form fields: amount, date_due, status, client_email
-    """
-    invoice = Invoice.query.get_or_404(invoice_id)
-    # Update fields
-    invoice.amount = request.form['amount']
-    invoice.date_due = request.form['date_due']
-    invoice.status = request.form['status']
+    # Update invoice fields
+    inv.amount   = request.form["amount"]
+    inv.date_due = request.form["date_due"]
+    inv.status   = request.form["status"]
 
-    # Update client email
-    invoice.client.email = request.form['client_email']
+    # Update related client
+    inv.client.email = request.form["client_email"]
 
     db.session.commit()
 
-    # Return JSON to match front-end's fetch() expectations
     return jsonify({
-        "client_name": invoice.client.name,
-        "invoice_id": invoice.invoice_id,
-        "amount": invoice.amount,
-        "date_due": invoice.date_due,
-        "status": invoice.status
-    }), 200
+        "client_name": inv.client.name,
+        "invoice_id" : inv.invoice_id,
+        "amount"     : inv.amount,
+        "date_due"   : inv.date_due,
+        "status"     : inv.status,
+    })
 
-
-@app.route('/export')
-@app.route('/export/<int:invoice_id>')
-def export_invoice(invoice_id=None):
+@app.route("/export")
+@app.route("/export/<int:invoice_id>")
+def export_invoice(invoice_id: int | None = None):
     """
-    GET: Export all invoices or a single invoice as CSV.
-    If <invoice_id> is provided, export only that one invoice.
+    Download one or all invoices as CSV.
     """
     if invoice_id:
-        inv = Invoice.query.get_or_404(invoice_id)
-        data = [{
-            'client_name': inv.client.name,
-            'client_email': inv.client.email,
-            'invoice_id': inv.invoice_id,
-            'amount': inv.amount,
-            'date_due': inv.date_due,
-            'status': inv.status
-        }]
+        invs = [Invoice.query.get_or_404(invoice_id)]
         filename = f"invoice_{invoice_id}.csv"
     else:
-        invoices = Invoice.query.all()
-        data = [{
-            'client_name': inv.client.name,
-            'client_email': inv.client.email,
-            'invoice_id': inv.invoice_id,
-            'amount': inv.amount,
-            'date_due': inv.date_due,
-            'status': inv.status
-        } for inv in invoices]
+        invs = Invoice.query.all()
         filename = "invoices.csv"
+
+    data = [{
+        "client_name" : i.client.name,
+        "client_email": i.client.email,
+        "invoice_id"  : i.invoice_id,
+        "amount"      : i.amount,
+        "date_due"    : i.date_due,
+        "status"      : i.status,
+    } for i in invs]
 
     df = pd.DataFrame(data)
     csv_data = df.to_csv(index=False)
 
-    return csv_data, 200, {
-        'Content-Type': 'text/csv',
-        'Content-Disposition': f'attachment; filename="{filename}"'
-    }
+    return (
+        csv_data,
+        200,
+        {
+            "Content-Type": "text/csv",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
+# -------------------------------------------------------------------
+# Chat endpoint
+# -------------------------------------------------------------------
 
-
-@app.route('/chat', methods=['POST'])
+@app.route("/chat", methods=["POST"])
 def chat():
     """
-    POST: Chat using OpenAI Assistants API
+    POST JSON: {"message": "<user text>"}
+    Returns:    {"response": "<assistant text>"}
     """
-    data = request.get_json()
-    user_message = data.get('message', '').strip()
-    if not user_message:
-        return jsonify({'error': 'Empty message'}), 400
+    data = request.get_json(silent=True) or {}
+    user_msg = (data.get("message") or "").strip()
+    if not user_msg:
+        return jsonify({"error": "Empty message"}), 400
 
     try:
-        if 'thread_id' not in session:
-            session['thread_id'] = client.beta.threads.create().id
-        thread_id = session['thread_id']
+        # Reuse the same thread for one browser session
+        if "thread_id" not in session:
+            session["thread_id"] = client.beta.threads.create().id
+        thread_id = session["thread_id"]
 
+        # Append user message
         client.beta.threads.messages.create(
             thread_id=thread_id,
             role="user",
-            content=user_message
+            content=user_msg,
         )
 
+        # Kick off a run
         run = client.beta.threads.runs.create(
             thread_id=thread_id,
-            assistant_id=assistant_id
+            assistant_id=ASSISTANT_ID,
+            model=MODEL,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather for a city",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                                "unit": {"type": "string"},
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_invoice_by_id",
+                        "description": "Return invoice data by invoice_id",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "invoice_id": {"type": "string"},
+                            },
+                            "required": ["invoice_id"],
+                        },
+                    },
+                },
+            ],
         )
 
-        # Handle tool calls if required
+        # Poll until completion or tool call
         while True:
-            run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-            if run_status.status == "completed":
-                break
-            elif run_status.status == "requires_action":
-                for call in run_status.required_action.submit_tool_outputs.tool_calls:
+            status = client.beta.threads.runs.retrieve(
+                thread_id=thread_id, run_id=run.id
+            )
+
+            if status.status == "requires_action":
+                # The assistant wants to call a tool
+                for call in status.required_action.submit_tool_outputs.tool_calls:
                     fn_name = call.function.name
                     args = json.loads(call.function.arguments)
+
                     if fn_name == "get_current_weather":
                         output = get_current_weather(**args)
+                    elif fn_name == "get_invoice_by_id":
+                        output = json.dumps(get_invoice_by_id(**args))
                     else:
                         output = f"Unknown tool: {fn_name}"
 
                     client.beta.threads.runs.submit_tool_outputs(
-    thread_id=thread_id,
-    run_id=run.id,
-    tool_outputs=[{
-        "tool_call_id": call.id,
-        "output": output
-    }]
-)
-            elif run_status.status in ("failed", "cancelled"):
-                return jsonify({"error": f"Run failed: {run_status.status}"}), 500
-            time.sleep(1)
-
-        while True:
-            status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
-            if status.status == "completed":
+                        thread_id=thread_id,
+                        run_id=run.id,
+                        tool_outputs=[{
+                            "tool_call_id": call.id,
+                            "output": output,
+                        }],
+                    )
+                # Continue polling after answering tool calls
+            elif status.status == "completed":
                 break
-            elif status.status in ("failed", "cancelled"):
-                return jsonify({"error": f"Run failed: {status.status}"}), 500
-            time.sleep(1)
+            elif status.status in {"failed", "cancelled", "expired"}:
+                return jsonify({"error": f"Run {status.status}"}), 500
 
-        messages = client.beta.threads.messages.list(thread_id=thread_id)
-        for msg in reversed(messages.data):
-            if msg.role == "assistant":
-                return jsonify({"response": msg.content[0].text.value})
+            time.sleep(0.5)
 
-        return jsonify({"error": "No assistant response"}), 500
+        # Read the most recent assistant message
+        msgs = client.beta.threads.messages.list(thread_id=thread_id, limit=1)
+        if not msgs.data:
+            return jsonify({"error": "No assistant response"}), 500
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-if __name__ == '__main__':
-    # Ensure tables exist before running
+        assistant_reply = msgs.data[0].content[0].text.value
+        return jsonify({"response": assistant_reply})
+
+    except Exception as exc:
+        # A top-level safeguard so the user sees an error
+        return jsonify({"error": str(exc)}), 500
+
+# -------------------------------------------------------------------
+# Application entry-point
+# -------------------------------------------------------------------
+
+if __name__ == "__main__":
+    # Make sure tables exist when running via `python app.py`
     with app.app_context():
-        inspector = inspect(db.engine)
-        if not inspector.has_table("invoice"):
-            print("[INFO] Creating tables...")
-            db.create_all()
+        db.create_all()
 
-    app.run(debug=True, host='0.0.0.0', port=5005)
+    app.run(host="0.0.0.0", port=5005, debug=True)
