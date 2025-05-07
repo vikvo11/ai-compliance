@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, all SDK versions)
 # All inline comments are in English, as requested.
-
+from __future__ import annotations
 import os
 import time
 import json
