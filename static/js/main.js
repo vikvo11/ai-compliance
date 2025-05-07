@@ -277,6 +277,9 @@ document.addEventListener('DOMContentLoaded', () => {
     expandBtn.addEventListener('click', () => {
       const chatBox = document.getElementById('chat-box');
       if (chatBox.style.width === '600px') {
+      chatBox.style.display = 'flex';
+      chatBox.style.flexDirection = 'column';
+
         chatBox.style.width = '340px';
         chatBox.style.height = 'auto';
       } else {
