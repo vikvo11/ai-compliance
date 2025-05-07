@@ -2,6 +2,8 @@ import os
 os.makedirs("/app/data", exist_ok=True)
 
 from flask import Flask, render_template, request, redirect, flash, jsonify
+from flask import session
+
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
 from sqlalchemy import inspect
@@ -9,6 +11,8 @@ import openai
 import configparser
 import time
 import json
+import requests
+
 
 
 
