@@ -190,6 +190,45 @@ def export_invoice(invoice_id=None):
 @app.route('/chat', methods=['POST'])
 def chat():
     """
+    POST: Chat using OpenAI Assistants API
+    """
+    data = request.get_json()
+    user_message = data.get('message', '').strip()
+    if not user_message:
+        return jsonify({'error': 'Empty message'}), 400
+
+    try:
+        thread = client.beta.threads.create()
+        thread_id = thread.id
+
+        client.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=user_message
+        )
+
+        run = client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id
+        )
+
+        while True:
+            status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+            if status.status == "completed":
+                break
+            elif status.status in ("failed", "cancelled"):
+                return jsonify({"error": f"Run failed: {status.status}"}), 500
+            time.sleep(1)
+
+        messages = client.beta.threads.messages.list(thread_id=thread_id)
+        for msg in reversed(messages.data):
+            if msg.role == "assistant":
+                return jsonify({"response": msg.content[0].text.value})
+
+        return jsonify({"error": "No assistant response"}), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     POST: Receive user message and respond with OpenAI Chat response
     """
     data = request.get_json()
