@@ -87,6 +87,9 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
     Return a short string with the current weather for the location.
     """
     try:
+        # Debug print to see if the function is called with correct args
+        print(f"[DEBUG] get_current_weather() called with location={location}, unit={unit}")
+
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1},
@@ -112,6 +115,9 @@ def get_invoice_by_id(invoice_id: str) -> dict:
     """
     Look up an invoice in the database and return a JSON-serialisable dict.
     """
+    # Debug print to see if the function is called with correct args
+    print(f"[DEBUG] get_invoice_by_id() called with invoice_id={invoice_id}")
+
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
@@ -166,6 +172,9 @@ def ensure_thread() -> str:
     """
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
+        print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
+    else:
+        print(f"[DEBUG] Using existing thread ID: {session['thread_id']}")
     return session["thread_id"]
 
 
@@ -173,10 +182,14 @@ def handle_tool_calls(thread_id: str, run_id: str, calls: Sequence[Any]) -> None
     """
     Execute tool calls requested by the assistant and submit results.
     """
+    # Debug print to see incoming calls
+    print(f"[DEBUG] handle_tool_calls() for thread_id={thread_id}, run_id={run_id}, calls={calls}")
+
     outputs = []
     for c in calls:
         fn = c.function.name
         args = json.loads(c.function.arguments)
+        print(f"[DEBUG] Tool call: {fn}, arguments: {args}")
         if fn == "get_current_weather":
             result = get_current_weather(**args)
         elif fn == "get_invoice_by_id":
@@ -190,6 +203,7 @@ def handle_tool_calls(thread_id: str, run_id: str, calls: Sequence[Any]) -> None
         run_id=run_id,
         tool_outputs=outputs,
     )
+    print("[DEBUG] Tool outputs submitted successfully.")
 
 
 def last_assistant_text(thread_id: str) -> str:
@@ -202,6 +216,8 @@ def last_assistant_text(thread_id: str) -> str:
             continue
         for blk in msg.content:
             if blk.type == "text":
+                # Debug print for the last assistant text found
+                print(f"[DEBUG] Last assistant text found: {blk.text.value}")
                 return blk.text.value
     return "⚠️ Assistant returned no text."
 
@@ -308,9 +324,12 @@ def chat_sync():
     """
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
+        print("[DEBUG] Received empty message in /chat endpoint.")
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
+    print(f"[DEBUG] /chat endpoint: user_msg='{user_msg}', thread_id='{tid}'")
+
     client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
     run = client.beta.threads.runs.create(
@@ -319,10 +338,12 @@ def chat_sync():
         **({"model": MODEL} if MODEL else {}),
         tools=TOOLS,
     )
+    print(f"[DEBUG] Created run with ID: {run.id} (blocking mode).")
 
     # Poll the run status until completion or error.
     while True:
         status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
+        print(f"[DEBUG] Run status: {status.status}")
         if status.status == "requires_action":
             handle_tool_calls(
                 tid, run.id, status.required_action.submit_tool_outputs.tool_calls
@@ -330,6 +351,7 @@ def chat_sync():
         elif status.status == "completed":
             break
         elif status.status in {"failed", "cancelled", "expired"}:
+            print(f"[DEBUG] Run ended with status: {status.status}")
             return jsonify({"error": f"Run {status.status}"}), 500
         time.sleep(0.4)
 
@@ -351,16 +373,24 @@ class SSEHandler(AssistantEventHandler):
 
     # ≥ 1.13 SDK  – called for each delta
     def on_text_delta(self, delta, _):
-        self.q.put(getattr(delta, "delta", getattr(delta, "value", "")))
+        # Debug print for text delta
+        debug_text_delta = getattr(delta, "delta", getattr(delta, "value", ""))
+        print(f"[DEBUG] SSEHandler on_text_delta received: {debug_text_delta}")
+        self.q.put(debug_text_delta)
 
     # ≤ 1.12 SDK – called for each full chunk
     def on_text(self, txt):
+        # Debug print for older chunk-based text
+        print(f"[DEBUG] SSEHandler on_text received: {txt}")
         self.q.put(txt)
 
     def on_tool_call(self, tcall):
+        print("[DEBUG] SSEHandler on_tool_call triggered.")
         handle_tool_calls(self.tid, tcall.run_id, [tcall])
 
     def on_end(self, _run):
+        # Debug print upon stream end
+        print("[DEBUG] SSEHandler on_end called. Sending None to queue.")
         self.q.put(None)
 
 
@@ -368,17 +398,22 @@ def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
     """
     Yield Server-Sent Events, sending a heartbeat every 20 s.
     """
+    print("[DEBUG] sse_generator started. Waiting for tokens...")
     heartbeat_at = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
             if tok is None:
+                print("[DEBUG] sse_generator received None, streaming done.")
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
+            print(f"[DEBUG] sse_generator sending token: {tok}")
             yield f"data: {tok}\n\n".encode("utf-8")
             heartbeat_at = time.time() + 20
         except queue.Empty:
+            # Debug print to show heartbeat logic
             if time.time() > heartbeat_at:
+                print("[DEBUG] sse_generator heartbeat.")
                 yield b": keep-alive\n\n"  # SSE comment
                 heartbeat_at = time.time() + 20
 
@@ -387,6 +422,7 @@ def wait_stream(manager: Any) -> None:
     """
     Block until the stream manager finishes (works for all SDK versions).
     """
+    print("[DEBUG] wait_stream() called. Waiting for the stream to finish...")
     if hasattr(manager, "wait_until_done"):
         manager.wait_until_done()
     elif hasattr(manager, "wait"):
@@ -394,6 +430,7 @@ def wait_stream(manager: Any) -> None:
     elif hasattr(manager, "__iter__"):  # ≤ 1.12
         for _ in manager:
             pass
+    print("[DEBUG] wait_stream() completed.")
 
 
 @app.route("/chat/stream", methods=["POST"])
@@ -403,15 +440,20 @@ def chat_stream():
     """
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
+        print("[DEBUG] Received empty message in /chat/stream endpoint.")
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
+    print(f"[DEBUG] /chat/stream endpoint: user_msg='{user_msg}', thread_id='{tid}'")
+
     client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
     q: queue.Queue[str | None] = queue.Queue()
     handler = SSEHandler(q, tid)
 
     def consume():
+        # Debug print to notify stream consumption started
+        print("[DEBUG] Stream consumption thread started.")
         stream_mgr = client.beta.threads.runs.stream(
             thread_id=tid,
             assistant_id=ASSISTANT_ID,
@@ -420,6 +462,7 @@ def chat_stream():
             event_handler=handler,
         )
         wait_stream(stream_mgr)
+        print("[DEBUG] Stream consumption thread finished.")
 
     threading.Thread(target=consume, daemon=True).start()
 
@@ -439,4 +482,5 @@ if __name__ == "__main__":
     with app.app_context():
         db.create_all()
     # In production set debug=False and bind to a real web server (gunicorn / uvicorn).
+    print("[DEBUG] Starting Flask app on 0.0.0.0:5005")
     app.run(host="0.0.0.0", port=5005, debug=True)
