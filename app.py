@@ -367,7 +367,7 @@ class StreamHandler:
     # ---------------------------------------------------------------------- #
     # Public entry
     # ---------------------------------------------------------------------- #
-    def process_event(self, ev: Any) -> None:
+    def process_event(self, ev: Any) -> bool:
         if ev.event == "thread.message.delta":
             self._push_text(ev)
 
@@ -376,7 +376,9 @@ class StreamHandler:
             self._submit_tools_and_stream(ev.data.id, calls)
 
         elif ev.event == "thread.run.completed":
-            self.q.put(None)            # stop signal
+            self.q.put(None)
+            return False
+        return True
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
@@ -423,8 +425,9 @@ def chat_stream():
             stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        for ev in stream:
-            handler.process_event(ev)
+        for ev in iter(stream.__next__, None):
+            if not handler.process_event(ev):
+                break
 
     threading.Thread(target=consume, daemon=True).start()
 
