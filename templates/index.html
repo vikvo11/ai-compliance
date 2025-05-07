@@ -355,20 +355,18 @@
     }
 
     #chat-box {
-      position: fixed;
-      bottom: 90px;
-      right: 24px;  /* <<-- now on the left */
-      width: 340px;
-      background: #fff;
-      border: 1px solid #ddd;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-      display: none;
-      flex-direction: column;
-      font-family: sans-serif;
-      z-index: 999;
-      overflow: hidden;
-    }
+  display: flex;
+  flex-direction: column;
+  height: 80vh;
+  width: 340px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  font-family: sans-serif;
+  z-index: 999;
+  overflow: hidden;
+}
 
     #chat-box header {
       display: flex;
@@ -388,14 +386,14 @@
     }
 
     #chat-box .messages {
-      max-height: 240px;
-      overflow-y: auto;
-      padding: 1rem;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-    }
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
 
     .quick-replies {
       display: flex;
