@@ -270,6 +270,20 @@ function crackGlass() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const expandBtn = document.getElementById('expand-chat');
+  if (expandBtn) {
+    expandBtn.addEventListener('click', () => {
+      const chatBox = document.getElementById('chat-box');
+      if (chatBox.style.width === '600px') {
+        chatBox.style.width = '340px';
+        chatBox.style.height = 'auto';
+      } else {
+        chatBox.style.width = '600px';
+        chatBox.style.height = '80vh';
+      }
+    });
+  }
+
   /* Attach crackGlass to the card after the DOM is loaded */
   const aiCard = document.getElementById('ai-extract-block');
   if (aiCard) aiCard.addEventListener('click', crackGlass);
