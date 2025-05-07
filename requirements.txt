@@ -2,6 +2,6 @@ Flask==2.2.5
 gunicorn
 flask_sqlalchemy
 pandas
-openai>=1.13
+openai>=1.14
 configparser
 requests>=2.0.0
