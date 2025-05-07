@@ -229,25 +229,6 @@ def chat():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    POST: Receive user message and respond with OpenAI Chat response
-    """
-    data = request.get_json()
-    user_message = data.get('message', '').strip()
-    if not user_message:
-        return jsonify({'error': 'Empty message'}), 400
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ]
-        )
-        answer = response.choices[0].message.content
-        return jsonify({"response": answer})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 if __name__ == '__main__':
     # Ensure tables exist before running
     with app.app_context():
