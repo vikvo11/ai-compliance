@@ -30,11 +30,9 @@ cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-# Do NOT hard-code a model unless you must override what is configured in the assistant
+# Do NOT hard-code a model unless you really want to override the assistant config
 MODEL: Optional[str] = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
-ASSISTANT_ID: str = cfg.get(
-    "DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")
-).strip()
+ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
 if not OPENAI_API_KEY:
     sys.exit("❌  OPENAI_API_KEY is not configured.")
@@ -366,4 +364,79 @@ class SSEHandler(AssistantEventHandler):
         self.q.put(None)
 
 
-def sse_generator(q: queue.Queue) -_
+def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
+    """
+    Yield Server-Sent Events, sending a heartbeat every 20 s.
+    """
+    heartbeat_at = time.time() + 20
+    while True:
+        try:
+            tok = q.get(timeout=1)
+            if tok is None:
+                yield b"event: done\ndata: [DONE]\n\n"
+                break
+            yield f"data: {tok}\n\n".encode("utf-8")
+            heartbeat_at = time.time() + 20
+        except queue.Empty:
+            if time.time() > heartbeat_at:
+                yield b": keep-alive\n\n"  # SSE comment
+                heartbeat_at = time.time() + 20
+
+
+def wait_stream(manager: Any) -> None:
+    """
+    Block until the stream manager finishes (works for all SDK versions).
+    """
+    if hasattr(manager, "wait_until_done"):
+        manager.wait_until_done()
+    elif hasattr(manager, "wait"):
+        manager.wait()
+    elif hasattr(manager, "__iter__"):  # ≤ 1.12
+        for _ in manager:
+            pass
+
+
+@app.route("/chat/stream", methods=["POST"])
+def chat_stream():
+    """
+    Streaming chat endpoint (Server-Sent Events).
+    """
+    user_msg = (request.json or {}).get("message", "").strip()
+    if not user_msg:
+        return jsonify({"error": "Empty message"}), 400
+
+    tid = ensure_thread()
+    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
+
+    q: queue.Queue[str | None] = queue.Queue()
+    handler = SSEHandler(q, tid)
+
+    def consume():
+        stream_mgr = client.beta.threads.runs.stream(
+            thread_id=tid,
+            assistant_id=ASSISTANT_ID,
+            **({"model": MODEL} if MODEL else {}),
+            tools=TOOLS,
+            event_handler=handler,
+        )
+        wait_stream(stream_mgr)
+
+    threading.Thread(target=consume, daemon=True).start()
+
+    return Response(
+        sse_generator(q),
+        mimetype="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7.  ENTRY POINT
+# ──────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
+    # In production set debug=False and bind to a real web server (gunicorn / uvicorn).
+    app.run(host="0.0.0.0", port=5005, debug=True)
