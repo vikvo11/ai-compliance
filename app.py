@@ -359,106 +359,99 @@ def chat_sync():
     return jsonify({"response": reply})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream)
+# 6.  STREAMING CHAT  (/chat/stream) – NEW SDK (openai ≥ 1.17)
 # ──────────────────────────────────────────────────────────────────────────────
-class SSEHandler(AssistantEventHandler):
-    def __init__(self, q, tid):
-        super().__init__()
-        self.q = q; self.tid = tid
+class SSEHandler:
+    """
+    Converts OpenAI streaming events into plain-text chunks for the SSE queue.
+    Tool calls are forwarded to handle_tool_calls().
+    """
+    def __init__(self, q: queue.Queue, thread_id: str):
+        self.q = q
+        self.thread_id = thread_id
 
-    def on_event(self, event):
-        print("[DEBUG] on_event:", event.event, flush=True)
-        # P2 – универсальная проверка для любых версий
-        delta = getattr(event.data, "delta", None)
-        if delta and getattr(delta, "content", None):
-            for part in delta.content:
-                if part.type == "text":
-                    self.q.put(part.text.value)
-        # «на всякий»: если SDK старый
-        if getattr(event.data, "text", None):
-            self.q.put(event.data.text.value)
+    def process_event(self, ev: openai.types.beta.threads.RunStreamEvent):
+        # Text deltas
+        if ev.event == "thread.message.delta":
+            delta = ev.data.delta
+            if delta and delta.content:
+                for part in delta.content:
+                    if part.type == "text":
+                        self.q.put(part.text.value)
 
-    def on_tool_call(self, call):
-        handle_tool_calls(self.tid, call.run_id, [call])
+        # Tool call requests
+        elif ev.event == "thread.run.requires_action":
+            calls = ev.data.required_action.submit_tool_outputs.tool_calls
+            handle_tool_calls(self.thread_id, ev.data.id, calls)
 
-    def on_end(self, _run=None):
-        self.q.put(None)
-
+        # Run completed → signal end of stream
+        elif ev.event == "thread.run.completed":
+            self.q.put(None)
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
     """
-    Yield Server-Sent Events, sending a heartbeat every 20 s.
+    Yields Server-Sent Events; sends a heartbeat every 20 s while waiting.
     """
     print("[DEBUG] sse_generator started. Waiting for tokens...")
     heartbeat_at = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
-            if tok is None:
-                print("[DEBUG] sse_generator received None, streaming done.")
+            if tok is None:                              # end-of-stream marker
+                print("[DEBUG] sse_generator finished.")
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
-            print(f"[DEBUG] sse_generator sending token: {tok}")
+            print(f"[DEBUG] sse_generator token: {tok}")
             yield f"data: {tok}\n\n".encode("utf-8")
             heartbeat_at = time.time() + 20
         except queue.Empty:
-            # Debug print to show heartbeat logic
             if time.time() > heartbeat_at:
-                print("[DEBUG] sse_generator heartbeat.")
-                yield b": keep-alive\n\n"  # SSE comment
+                yield b": keep-alive\n\n"                # comment heartbeat
                 heartbeat_at = time.time() + 20
-
-
-def wait_stream(manager: Any) -> None:
-    """
-    Block until the stream manager finishes (works for all SDK versions).
-    """
-    print("[DEBUG] wait_stream() called. Waiting for the stream to finish...")
-    if hasattr(manager, "wait_until_done"):
-        manager.wait_until_done()
-    elif hasattr(manager, "wait"):
-        manager.wait()
-    elif hasattr(manager, "__iter__"):  # ≤ 1.12
-        for _ in manager:
-            pass
-    print("[DEBUG] wait_stream() completed.")
 
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """
-    Streaming chat endpoint (Server-Sent Events).
+    Streaming chat endpoint (Server-Sent Events) – uses runs.create(stream=True).
     """
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
-        print("[DEBUG] Received empty message in /chat/stream endpoint.")
         return jsonify({"error": "Empty message"}), 400
 
-    tid = ensure_thread()
-    print(f"[DEBUG] /chat/stream endpoint: user_msg='{user_msg}', thread_id='{tid}'")
+    thread_id = ensure_thread()
+    print(f"[DEBUG] /chat/stream: '{user_msg}', tid={thread_id}")
 
-    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
+    # Save user message
+    client.beta.threads.messages.create(
+        thread_id=thread_id, role="user", content=user_msg
+    )
 
+    # Queue for outgoing chunks
     q: queue.Queue[str | None] = queue.Queue()
-    handler = SSEHandler(q, tid)
 
     def consume():
-        # Debug print to notify stream consumption started
-        print("[DEBUG] Stream consumption thread started.")
-        stream_mgr = client.beta.threads.runs.stream(
-            thread_id=tid,
+        print("[DEBUG] Stream reader started.")
+        handler = SSEHandler(q, thread_id)
+
+        # NEW API: create(run, stream=True) returns a generator of events
+        stream = client.beta.threads.runs.create(
+            thread_id=thread_id,
             assistant_id=ASSISTANT_ID,
-            **({"model": MODEL} if MODEL else {}),
             tools=TOOLS,
-            stream=True, 
-            event_handler=handler,
+            stream=True,
+            **({"model": MODEL} if MODEL else {}),
         )
-        wait_stream(stream_mgr)
-        print("[DEBUG] Stream consumption thread finished.")
+
+        # Iterate over all events
+        for ev in stream:
+            handler.process_event(ev)
+        print("[DEBUG] Stream reader finished.")
 
     threading.Thread(target=consume, daemon=True).start()
 
+    # Return SSE response
     return Response(
         sse_generator(q),
         mimetype="text/event-stream",
