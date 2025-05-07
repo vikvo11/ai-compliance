@@ -244,6 +244,35 @@ def chat():
             assistant_id=assistant_id
         )
 
+        # Handle tool calls if required
+        while True:
+            run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+            if run_status.status == "completed":
+                break
+            elif run_status.status == "requires_action":
+                for call in run_status.required_action.submit_tool_outputs.tool_calls:
+                    fn_name = call.function.name
+                    args = json.loads(call.function.arguments)
+                    if fn_name == "get_current_weather":
+                        output = get_current_weather(**args)
+                    else:
+                        output = f"Unknown tool: {fn_name}"
+
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="tool",
+                        content=output,
+                        tool_call_id=call.id
+                    )
+
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id
+                )
+            elif run_status.status in ("failed", "cancelled"):
+                return jsonify({"error": f"Run failed: {run_status.status}"}), 500
+            time.sleep(1)
+
         while True:
             status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
             if status.status == "completed":
