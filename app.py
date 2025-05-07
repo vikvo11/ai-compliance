@@ -1,7 +1,6 @@
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Assistants (function calling & streaming)
-# ================================================================
 
 import os, time, json, queue, threading, requests, configparser
 from collections.abc import Sequence, Generator
@@ -117,7 +116,7 @@ def handle_tool_calls(thread_id: str, run_id: str, calls: Sequence[Any]) -> None
                                                  tool_outputs=outs)
 
 # -------------------------------------------------------------------
-# Routes — UI helpers (index / delete / edit)
+# Routes — UI helpers (index / delete / edit / export)
 # -------------------------------------------------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -203,6 +202,18 @@ def sse_gen(q:queue.Queue) -> Generator[bytes,None,None]:
             yield b"event: done\ndata: [DONE]\n\n"; break
         yield f"data: {tok}\n\n".encode()
 
+def wait_stream(manager: Any):
+    """
+    Blocks until run completes; works for any SDK version.
+    """
+    if hasattr(manager, "wait_until_done"):
+        manager.wait_until_done()
+    elif hasattr(manager, "wait"):
+        manager.wait()
+    elif hasattr(manager, "__iter__"):
+        for _ in manager:    # legacy iterator
+            pass
+
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     user_msg = (request.json or {}).get("message","").strip()
@@ -213,15 +224,16 @@ def chat_stream():
     q:queue.Queue[str|None] = queue.Queue()
     handler = SSEHandler(q, thread_id)
 
-    # Фоновая нитка: запускаем поток и дожидаемся конца
     def consume():
-        client.beta.threads.runs.stream(
+        mgr = client.beta.threads.runs.stream(
             thread_id=thread_id,
             assistant_id=ASSISTANT_ID,
             model=MODEL,
             tools=TOOLS,
             event_handler=handler,
-        ).wait_until_done()              # ← ключ к исправлению
+        )
+        wait_stream(mgr)          # ← универсальная блокировка
+
     threading.Thread(target=consume, daemon=True).start()
 
     return Response(sse_gen(q), mimetype="text/event-stream",
