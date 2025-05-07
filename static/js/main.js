@@ -271,6 +271,9 @@ function crackGlass() {
 
 document.addEventListener('DOMContentLoaded', () => {
   chatBox.style.display = 'none'; // Force chat to be hidden on page load
+  chatBox.style.width = '340px';
+  chatBox.style.height = 'auto';
+
 
   const expandBtn = document.getElementById('expand-chat');
   if (expandBtn) {
