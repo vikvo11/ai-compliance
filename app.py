@@ -56,6 +56,34 @@ class Invoice(db.Model):
 
 # --- Routes ---
 # --- Assistant Function Call ---
+def get_current_weather(location: str, unit: str = "celsius"):
+    try:
+        geo_resp = requests.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": location})
+        geo_resp.raise_for_status()
+        geo_data = geo_resp.json().get("results")
+        if not geo_data:
+            return f"Location '{location}' not found."
+
+        lat = geo_data[0]["latitude"]
+        lon = geo_data[0]["longitude"]
+
+        weather_resp = requests.get("https://api.open-meteo.com/v1/forecast", params={
+            "latitude": lat,
+            "longitude": lon,
+            "current_weather": "true"
+        })
+        weather_resp.raise_for_status()
+        weather = weather_resp.json().get("current_weather", {})
+
+        temp = weather.get("temperature")
+        wind = weather.get("windspeed")
+        time_str = weather.get("time")
+
+        return f"The temperature in {location} is {temp}°C with wind speed {wind} m/s at {time_str}."
+
+    except Exception as e:
+        return f"Error fetching weather: {str(e)}"
+
 def get_invoice_by_id(invoice_id):
     invoice = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if invoice:
