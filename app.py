@@ -23,7 +23,6 @@ client = openai.OpenAI(api_key=config.get('DEFAULT', 'OPENAI_API_KEY', fallback=
 model = config.get('DEFAULT', 'model', fallback='gpt-3.5-turbo').strip()
 system_prompt = config.get('DEFAULT', 'system_prompt', fallback='You are a helpful assistant.')
 assistant_id = config.get('DEFAULT', 'assistant_id', fallback='').strip()
-.strip()
 
 
 # Run table creation if needed
