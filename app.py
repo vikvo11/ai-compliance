@@ -230,7 +230,7 @@ def chat():
 
     try:
         if 'thread_id' not in session:
-        session['thread_id'] = client.beta.threads.create().id
+            session['thread_id'] = client.beta.threads.create().id
         thread_id = session['thread_id']
 
         client.beta.threads.messages.create(
