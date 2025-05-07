@@ -344,7 +344,7 @@ def chat_stream():
     handler = SSEHandler(q, thread_id)
 
     # Start run + immediate streaming
-    _ = client.beta.threads.runs.create_and_stream(
+    _ = client.beta.threads.runs.stream(
         thread_id=thread_id,
         assistant_id=ASSISTANT_ID,
         model=MODEL,
