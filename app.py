@@ -362,36 +362,26 @@ def chat_sync():
 # 6.  STREAMING CHAT  (/chat/stream)
 # ──────────────────────────────────────────────────────────────────────────────
 class SSEHandler(AssistantEventHandler):
-    """
-    Custom event handler that places tokens in a queue for SSE.
-    """
-
-    def __init__(self, q: queue.Queue, tid: str):
+    def __init__(self, q, tid):
         super().__init__()
-        self.q = q
+        self.q   = q
         self.tid = tid
 
-    # ≥ 1.13 SDK  – called for each delta
-    def on_text_delta(self, delta, _):
-        # Debug print for text delta
-        debug_text_delta = getattr(delta, "delta", getattr(delta, "value", ""))
-        print(f"[DEBUG] SSEHandler on_text_delta received: {debug_text_delta}")
-        self.q.put(debug_text_delta)
+    def on_event(self, event):
+        if event.event == "thread.message.delta":
+            for part in (event.data.delta.content or []):
+                if part.type == "text" and part.text and part.text.value:
+                    self.q.put(part.text.value)
 
-    # ≤ 1.12 SDK – called for each full chunk
-    def on_text(self, txt):
-        # Debug print for older chunk-based text
-        print(f"[DEBUG] SSEHandler on_text received: {txt}")
-        self.q.put(txt)
+    def on_tool_call(self, call):
+        handle_tool_calls(self.tid, call.run_id, [call])
 
-    def on_tool_call(self, tcall):
-        print("[DEBUG] SSEHandler on_tool_call triggered.")
-        handle_tool_calls(self.tid, tcall.run_id, [tcall])
-
-    def on_end(self, _run):
-        # Debug print upon stream end
-        print("[DEBUG] SSEHandler on_end called. Sending None to queue.")
+    def on_end(self, _run=None):
         self.q.put(None)
+
+    def on_text_delta(self, delta, _snapshot=None):
+        txt = getattr(delta, "text", None)
+        self.q.put(txt.value if txt else str(delta))
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
