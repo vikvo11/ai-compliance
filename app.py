@@ -331,7 +331,6 @@ def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """POST JSON -> text/event-stream (tokens in real time)."""
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
@@ -343,7 +342,7 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
     handler = SSEHandler(q, thread_id)
 
-    # Start run + immediate streaming
+    # запуск + стрим
     _ = client.beta.threads.runs.stream(
         thread_id=thread_id,
         assistant_id=ASSISTANT_ID,
@@ -352,9 +351,16 @@ def chat_stream():
         event_handler=handler,
     )
 
-    return Response(sse_generator(q),
-                    mimetype="text/event-stream",
-                    headers={"X-Accel-Buffering": "no"})
+    # headers: text/event-stream + no-cache
+    return Response(
+        sse_generator(q),
+        mimetype="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 # -------------------------------------------------------------------
 # Entry point
