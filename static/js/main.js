@@ -278,18 +278,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const expandBtn = document.getElementById('expand-chat');
   if (expandBtn) {
     expandBtn.addEventListener('click', () => {
-      const chatBox = document.getElementById('chat-box');
-      if (chatBox.style.width === '600px') {
-      chatBox.style.display = 'flex';
-      chatBox.style.flexDirection = 'column';
-
-        chatBox.style.width = '340px';
-        chatBox.style.height = 'auto';
-      } else {
-        chatBox.style.width = '600px';
-        chatBox.style.height = '80vh';
-      }
-    });
+  const chatBox = document.getElementById('chat-box');
+  if (chatBox.style.width === '600px') {
+    chatBox.style.width = '340px';
+    chatBox.style.height = 'auto';
+  } else {
+    chatBox.style.display = 'flex';
+    chatBox.style.flexDirection = 'column';
+    chatBox.style.width = '600px';
+    chatBox.style.height = '80vh';
+  }
+});
   }
 
   /* Attach crackGlass to the card after the DOM is loaded */
