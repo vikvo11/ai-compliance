@@ -273,6 +273,8 @@ document.addEventListener('DOMContentLoaded', () => {
   chatBox.style.display = 'none'; // Force chat to be hidden on page load
   chatBox.style.width = '340px';
   chatBox.style.height = 'auto';
+  chatBox.querySelector('.messages').style.maxHeight = '300px';
+
 
 
   const expandBtn = document.getElementById('expand-chat');
@@ -282,6 +284,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (chatBox.style.width === '600px') {
     chatBox.style.width = '340px';
     chatBox.style.height = 'auto';
+  chatBox.querySelector('.messages').style.maxHeight = '300px';
+
   } else {
     chatBox.style.display = 'flex';
     chatBox.style.flexDirection = 'column';
