@@ -62,8 +62,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
     try:
         geo = requests.get("https://geocoding-api.open-meteo.com/v1/search",
                            params={"name": location, "count": 1}, timeout=5).json().get("results")
-        if not geo:
-            return f"Location '{location}' not found"
+        if not geo: return f"Location '{location}' not found"
         lat, lon = geo[0]["latitude"], geo[0]["longitude"]
         cw = requests.get("https://api.open-meteo.com/v1/forecast",
                           params={"latitude": lat, "longitude": lon, "current_weather": True},
@@ -152,7 +151,6 @@ def edit_invoice(invoice_id:int):
     return jsonify({"client_name": inv.client.name, "invoice_id": inv.invoice_id,
                     "amount": inv.amount, "date_due": inv.date_due, "status": inv.status})
 
-# ---- fixed decorator block -------------------------------------------------
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id:int | None = None):
@@ -161,7 +159,7 @@ def export_invoice(invoice_id:int | None = None):
                          "invoice_id": i.invoice_id, "amount": i.amount,
                          "date_due": i.date_due, "status": i.status} for i in invs]).to_csv(index=False)
     fname = f"invoice_{invoice_id or 'all'}.csv"
-    return (csv, 200, {"Content-Type": "text/csv",
+    return (csv, 200, {"Content-Type":"text/csv",
                        "Content-Disposition": f'attachment; filename="{fname}"'})
 
 # -------------------------------------------------------------------
@@ -215,13 +213,15 @@ def chat_stream():
     q:queue.Queue[str|None] = queue.Queue()
     handler = SSEHandler(q, thread_id)
 
+    # Фоновая нитка: запускаем поток и дожидаемся конца
     def consume():
-        for _ in client.beta.threads.runs.stream(thread_id=thread_id,
-                                                 assistant_id=ASSISTANT_ID,
-                                                 model=MODEL,
-                                                 tools=TOOLS,
-                                                 event_handler=handler):
-            pass
+        client.beta.threads.runs.stream(
+            thread_id=thread_id,
+            assistant_id=ASSISTANT_ID,
+            model=MODEL,
+            tools=TOOLS,
+            event_handler=handler,
+        ).wait_until_done()              # ← ключ к исправлению
     threading.Thread(target=consume, daemon=True).start()
 
     return Response(sse_gen(q), mimetype="text/event-stream",
