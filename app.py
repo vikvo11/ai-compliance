@@ -229,8 +229,9 @@ def chat():
         return jsonify({'error': 'Empty message'}), 400
 
     try:
-        thread = client.beta.threads.create()
-        thread_id = thread.id
+        if 'thread_id' not in session:
+    session['thread_id'] = client.beta.threads.create().id
+thread_id = session['thread_id']
 
         client.beta.threads.messages.create(
             thread_id=thread_id,
