@@ -1,6 +1,8 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, SDK >= 1.17)
+# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, SDK ≥ 1.23)
+# NOTE: All comments are in English!
+
 from __future__ import annotations
 
 import json
@@ -16,8 +18,16 @@ import configparser
 import requests
 import openai
 import pandas as pd
-from flask import (Flask, Response, flash, jsonify, redirect, render_template,
-                   request, session)
+from flask import (
+    Flask,
+    Response,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+)
 from flask_sqlalchemy import SQLAlchemy
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -26,12 +36,11 @@ from flask_sqlalchemy import SQLAlchemy
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
-                         fallback=os.getenv("OPENAI_API_KEY"))
-MODEL: Optional[str] = cfg.get("DEFAULT", "model",
-                               fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
-ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id",
-                            fallback=os.getenv("ASSISTANT_ID", "")).strip()
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
+MODEL: Optional[str] = (
+    cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
+)
+ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
 if not OPENAI_API_KEY:
     sys.exit("❌  OPENAI_API_KEY is not configured.")
@@ -304,35 +313,35 @@ def chat_sync():
     return jsonify({"error": "No assistant response"}), 500
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream) – robust tool-call handling
+# 6.  STREAMING CHAT  (/chat/stream)
+#     Robust tool-call handling without relying on ev.data.run_id
 # ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
+def _extract_tool_calls(ev: Any) -> list[Any] | None:
     """
-    Return (tool_calls, run_id) if present in any known structure; else None.
+    Extract a list of tool_calls from any known event structure.
+    We no longer try to read .run_id here.
     """
     delta = getattr(ev.data, "delta", None)
-    if delta:
-        tc = getattr(delta, "tool_calls", None)
-        if tc:
-            return tc, ev.data.run_id
-        sd = getattr(delta, "step_details", None)
-        if sd and getattr(sd, "tool_calls", None):
-            return sd.tool_calls, ev.data.run_id
+    if delta and getattr(delta, "tool_calls", None):
+        return delta.tool_calls
+
+    sd = getattr(delta, "step_details", None)
+    if sd and getattr(sd, "tool_calls", None):
+        return sd.tool_calls
 
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
-        return step.tool_calls, ev.data.run_id
+        return step.tool_calls
 
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
-        return ra.submit_tool_outputs.tool_calls, ev.data.id
+        return ra.submit_tool_outputs.tool_calls
     return None
 
 
-def _follow_stream_after_tools(run_id: str,
-                               calls: Sequence[Any],
-                               q: queue.Queue,
-                               tid: str) -> None:
+def _follow_stream_after_tools(
+    run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str
+) -> None:
     """Execute tool calls and stream the continuation of the run."""
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
@@ -341,11 +350,11 @@ def _follow_stream_after_tools(run_id: str,
         tool_outputs=outs,
         stream=True,
     )
-    pipe_events(follow, q, tid)  # recurse
+    pipe_events(follow, q, tid, run_id)  # recurse with same run_id
 
 
-def pipe_events(events, q: queue.Queue, tid: str) -> None:
-    """Iterate (recursively) over events, pushing text chunks into `q`."""
+def pipe_events(events, q: queue.Queue, tid: str, run_id: str) -> None:
+    """Iterate (recursively) over events, pushing text chunks into the queue."""
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
@@ -356,9 +365,8 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
                     q.put(part.text.value)
 
         # Potential tool calls
-        elif (tc_block := _extract_tool_calls(ev)) is not None:
-            tool_calls, run_id = tc_block
-            _follow_stream_after_tools(run_id, tool_calls, q, tid)
+        elif (tcs := _extract_tool_calls(ev)) is not None:
+            _follow_stream_after_tools(run_id, tcs, q, tid)
 
         # End of run
         elif ev.event == "thread.run.completed":
@@ -404,7 +412,8 @@ def chat_stream():
             stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        pipe_events(first, q, tid)
+        # Pass the known run_id explicitly
+        pipe_events(first, q, tid, first.id)
         print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
