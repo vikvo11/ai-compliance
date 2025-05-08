@@ -1,13 +1,24 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling)
+# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling) — SDK 1.78+
 from __future__ import annotations
-import os, sys, time, json, queue, threading, asyncio, functools, logging
+
+import os
+import sys
+import time
+import json
+import queue
+import threading
+import asyncio
+import functools
+import logging
 from collections.abc import Generator
 from typing import Any
 
-import httpx, pandas as pd, openai, configparser
-from openai import NotFoundError
+import httpx
+import pandas as pd
+import configparser
+from openai import OpenAI, NotFoundError      # ← new import
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context
@@ -16,30 +27,45 @@ from flask_sqlalchemy import SQLAlchemy
 
 # ─────────────────── 0. LOGGING ──────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL,
+logging.basicConfig(
+    level=LOG_LEVEL,
     format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S%z", force=True)
+    datefmt="%Y-%m-%dT%H:%M:%S%z",
+    force=True,
+)
 log = logging.getLogger("app")
 
 # ─────────────────── 1. OPENAI ───────────────────────────────
-cfg = configparser.ConfigParser(); cfg.read("cfg/openai.cfg")
+cfg = configparser.ConfigParser()
+cfg.read("cfg/openai.cfg")
+
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
 MODEL = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-if not OPENAI_API_KEY: log.critical("OPENAI_API_KEY missing"); sys.exit(1)
-client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
+if not OPENAI_API_KEY:
+    log.critical("OPENAI_API_KEY missing")
+    sys.exit(1)
+
+client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)   # ← new style
 
 # ─────────────────── 2. FLASK & DB ───────────────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
-app.config.update(SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
-                  SQLALCHEMY_TRACK_MODIFICATIONS=False)
-db = SQLAlchemy(app); os.makedirs("/app/data", exist_ok=True)
+app.config.update(
+    SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
+    SQLALCHEMY_TRACK_MODIFICATIONS=False,
+)
+db = SQLAlchemy(app)
+os.makedirs("/app/data", exist_ok=True)
+
 
 class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128))
-    invoices = db.relationship("Invoice", backref="client", lazy=True, cascade="all, delete-orphan")
+    invoices = db.relationship(
+        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
+    )
+
 
 class Invoice(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -49,83 +75,155 @@ class Invoice(db.Model):
     status = db.Column(db.String(32), nullable=False)
     client_id = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
 
-with app.app_context(): db.create_all()
+
+with app.app_context():
+    db.create_all()
 
 # ─────────────────── 3. TOOL FUNCTIONS ───────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
+
 @functools.lru_cache(maxsize=1024)
 def _coords_for(city: str) -> tuple[float, float] | None:
-    r = httpx.get("https://geocoding-api.open-meteo.com/v1/search",
-                  params={"name": city, "count": 1}, timeout=HTTP_TIMEOUT)
-    res = r.json().get("results"); return None if not res else (res[0]["latitude"], res[0]["longitude"])
+    r = httpx.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1},
+        timeout=HTTP_TIMEOUT,
+    )
+    res = r.json().get("results")
+    return None if not res else (res[0]["latitude"], res[0]["longitude"])
+
 
 async def _weather_for(lat: float, lon: float) -> dict:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
-        r = await ac.get("https://api.open-meteo.com/v1/forecast",
-                         params={"latitude": lat, "longitude": lon, "current_weather": True})
+        r = await ac.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": lat, "longitude": lon, "current_weather": True},
+        )
     return r.json().get("current_weather", {})
 
+
 def get_current_weather(location: str, unit: str = "celsius") -> str:
-    c = _coords_for(location);  cw = asyncio.run(_weather_for(*c)) if c else None
-    if not cw: return f"Location '{location}' not found."
-    t = cw["temperature"]; t = round(t*9/5+32,1) if unit=="fahrenheit" else t
-    return f"The temperature in {location} is {t} {'°F' if unit=='fahrenheit' else '°C'}."
+    coords = _coords_for(location)
+    cw = asyncio.run(_weather_for(*coords)) if coords else None
+    if not cw:
+        return f"Location '{location}' not found."
+    temp = cw["temperature"]
+    temp = round(temp * 9 / 5 + 32, 1) if unit == "fahrenheit" else temp
+    return f"The temperature in {location} is {temp} {'°F' if unit == 'fahrenheit' else '°C'}."
+
 
 def get_invoice_by_id(invoice_id: str) -> dict:
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    return {"error": f"Invoice {invoice_id} not found"} if not inv else {
-        "invoice_id": inv.invoice_id, "amount": inv.amount, "date_due": inv.date_due,
-        "status": inv.status, "client_name": inv.client.name, "client_email": inv.client.email}
+    return (
+        {"error": f"Invoice {invoice_id} not found"}
+        if not inv
+        else {
+            "invoice_id": inv.invoice_id,
+            "amount": inv.amount,
+            "date_due": inv.date_due,
+            "status": inv.status,
+            "client_name": inv.client.name,
+            "client_email": inv.client.email,
+        }
+    )
+
 
 TOOLS = [
-    {"name": "get_current_weather","type": "function","description": "Get current weather", "parameters": {
-        "type":"object","properties":{"location":{"type":"string"},"unit":{"type":"string","enum":["celsius","fahrenheit"],"default":"celsius"}},"required":["location"]}},
-    {"name": "get_invoice_by_id","type": "function","description": "Return invoice data","parameters":{
-        "type":"object","properties":{"invoice_id":{"type":"string"}},"required":["invoice_id"]}},
+    {
+        "name": "get_current_weather",
+        "type": "function",
+        "description": "Get current weather",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"},
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "default": "celsius",
+                },
+            },
+            "required": ["location"],
+        },
+    },
+    {
+        "name": "get_invoice_by_id",
+        "type": "function",
+        "description": "Return invoice data",
+        "parameters": {
+            "type": "object",
+            "properties": {"invoice_id": {"type": "string"}},
+            "required": ["invoice_id"],
+        },
+    },
 ]
-DISPATCH = {"get_current_weather": get_current_weather, "get_invoice_by_id": get_invoice_by_id}
+DISPATCH = {
+    "get_current_weather": get_current_weather,
+    "get_invoice_by_id": get_invoice_by_id,
+}
 
 # ─────────────────── 4. STREAM HANDLER ───────────────────────
 def _run_tool(name: str, args: str) -> str:
-    try: params = json.loads(args or "{}")
-    except json.JSONDecodeError: return f"Bad JSON: {args}"
-    fn = DISPATCH.get(name); res = fn(**params) if fn else f"Unknown tool {name}"
+    """Execute a tool and always return a string (JSON‐string for dict)."""
+    try:
+        params = json.loads(args or "{}")
+    except json.JSONDecodeError:
+        return f"Bad JSON: {args}"
+    fn = DISPATCH.get(name)
+    res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
-# ─── helper: выполнить tool и продолжить поток ───────────────
-def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
-                 q: queue.Queue[str | None]) -> str:
-    log.info("RUN tool=%s id=%s args=%s", name, tc_id, args_json)
-    print(f"DBG | RUN tool={name} id={tc_id}")
 
-    out = _run_tool(name, args_json)
+def _finish_tool(  # noqa: C901
+    response_id: str,
+    thread_id: str,
+    run_id: str,
+    tool_call_id: str,
+    name: str,
+    args_json: str,
+    q: queue.Queue[str | None],
+) -> str:
+    """Call the tool, send its output back to OpenAI, and continue streaming."""
+    log.info("RUN tool=%s id=%s args=%s", name, tool_call_id, args_json)
+    print(f"DBG | RUN tool={name} id={tool_call_id}")
 
-    # 1️⃣  если есть «родной» метод — пользуемся им
-    if hasattr(client.responses, "actions") and \
-       hasattr(client.responses.actions, "submit_tool_outputs"):
+    output = _run_tool(name, args_json)
+
+    # Preferred path for SDK >= 1.78
+    if hasattr(client.beta.threads.runs, "submit_tool_outputs"):
+        follow = client.beta.threads.runs.submit_tool_outputs(
+            thread_id=thread_id,
+            run_id=run_id,
+            tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
+            stream=True,
+        )
+        return _pipe(follow, q, thread_id, run_id)
+
+    # Fallbacks for older SDKs -------------------------------------------------
+    if hasattr(client.responses, "actions") and hasattr(
+        client.responses.actions, "submit_tool_outputs"
+    ):
         submit = client.responses.actions.submit_tool_outputs
-
-    elif hasattr(client.responses, "submit_tool_outputs"):          # SDK 1.3–1.4
+    elif hasattr(client.responses, "submit_tool_outputs"):
         submit = client.responses.submit_tool_outputs
-
-    else:                                                            # fallback
+    else:
+        # Try manual POST to legacy paths
         try:
             from openai.resources.responses import ResponseObject as Cast
         except ImportError:
             try:
-                from openai.resources.responses import Response as Cast
+                from openai.resources.responses import Response as Cast  # 1.3–1.4
             except ImportError:
                 Cast = dict
 
-        # список возможных путей (без ведущего /v1)
         _CANDIDATES = [
             "responses/{id}/actions/submit_tool_outputs",
             "responses/{id}/submit_tool_outputs",
             "responses/{id}/tool_outputs",
         ]
 
-        def submit(response_id, tool_outputs, stream):
+        def submit(response_id, tool_outputs, stream):  # type: ignore
             last_err = None
             for tmpl in _CANDIDATES:
                 path = tmpl.format(id=response_id)
@@ -138,45 +236,50 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
                         cast_to=Cast,
                     )
                 except NotFoundError as e:
-                    last_err = e          # пробуем следующий путь
-            raise last_err                # все варианты 404
+                    last_err = e
+            raise last_err
 
-    # вызов выбранной функции submit
     follow = submit(
-        response_id=resp_id,
-        tool_outputs=[{"tool_call_id": tc_id, "output": out}],
+        response_id=response_id,
+        tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
         stream=True,
     )
-    return _pipe(follow, q)
+    return _pipe(follow, q, thread_id, run_id)
 
 
-# ─── основной парсер потока ──────────────────────────────────
-def _pipe(stream, q: queue.Queue[str | None]) -> str:
-    """
-    Stream-парсер Responses-API c явными print-отладками.
-    INFO-лог остаётся, но дублируем всё в stdout, чтобы видеть
-    даже при скромных настройках логгера / Docker-redirect.
-    """
-    print("DBG | PIPE START")                  # ← начало потока
-    resp_id = ""
-    buf: dict[str, dict] = {}                  # id → {"name": str, "parts": []}
+def _pipe(  # noqa: C901
+    stream,
+    q: queue.Queue[str | None],
+    thread_id: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """Parse the streaming events from the Responses API."""
+    print("DBG | PIPE START")
+    response_id = ""
+    buf: dict[str, dict[str, Any]] = {}  # tool_call_id → {"name": str, "parts": []}
 
     for ev in stream:
-        typ   = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
+        typ = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
         delta = getattr(ev, "delta", None)
         log.info("▶ %s   delta=%s", typ, bool(delta))
         print(f"DBG | ▶ {typ:40} delta={bool(delta)}")
 
+        # Save response / thread / run IDs
         if getattr(ev, "response", None):
-            resp_id = ev.response.id
-            print(f"DBG |   response.id = {resp_id}")
+            response_id = ev.response.id
+            thread_id = getattr(ev.response, "thread_id", thread_id)
+            run_id = getattr(ev.response, "run_id", run_id)
+            print(
+                f"DBG |   response.id={response_id}  "
+                f"thread_id={thread_id}  run_id={run_id}"
+            )
 
-        # текстовые токены
+        # Plain text tokens
         if isinstance(delta, str) and "arguments" not in typ:
-            print(f"DBG |   text: {delta[:70].replace(chr(10),'⏎')}")
+            print(f"DBG |   text: {delta[:70].replace(chr(10), '⏎')}")
             q.put(delta)
 
-        # ── старая schema: response.tool_calls ───────────────
+        # ── old schema: response.tool_calls ───────────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
@@ -184,14 +287,22 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 full = getattr(tc.function, "arguments", None)
                 if full:
                     print("DBG |   immediate JSON args")
-                    resp_id = _finish_tool(resp_id, tc.id, tc.function.name, full, q)
+                    response_id = _finish_tool(
+                        response_id, thread_id, run_id, tc.id, tc.function.name, full, q
+                    )
 
-        # ── новая schema: output_item.added ──────────────────
+        # ── new schema: output_item.added ─────────────────────
         if typ == "response.output_item.added":
-            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
-                       or ev.model_dump(exclude_none=True).get("item")
-            item = item_obj if isinstance(item_obj, dict) else \
-                   item_obj.model_dump(exclude_none=True)
+            item_obj = (
+                getattr(ev, "item", None)
+                or getattr(ev, "output_item", None)
+                or ev.model_dump(exclude_none=True).get("item")
+            )
+            item = (
+                item_obj
+                if isinstance(item_obj, dict)
+                else item_obj.model_dump(exclude_none=True)
+            )
             if item and item.get("type") in ("function_call", "tool_call"):
                 iid = item["id"]
                 fname = (
@@ -203,75 +314,104 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                     buf[iid] = {"name": fname, "parts": []}
                     print(f"DBG |   declare id={iid} func={fname}")
 
-        # аргумент-дельты
+        # Argument deltas
         if "arguments.delta" in typ:
-            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
-                  or getattr(ev, "tool_call_id", None)
+            iid = (
+                getattr(ev, "output_item_id", None)
+                or getattr(ev, "item_id", None)
+                or getattr(ev, "tool_call_id", None)
+            )
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
-                print(f"DBG |   arg-chunk for {iid}  len={len(buf[iid]['parts'])}")
+                print(
+                    f"DBG |   arg-chunk for {iid}  "
+                    f"len={len(buf[iid]['parts'])}"
+                )
 
-        # окончание аргументов
+        # End of arguments
         if typ.endswith("arguments.done"):
-            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
-                  or getattr(ev, "tool_call_id", None)
+            iid = (
+                getattr(ev, "output_item_id", None)
+                or getattr(ev, "item_id", None)
+                or getattr(ev, "tool_call_id", None)
+            )
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
                 print(f"DBG |   args.done id={iid}  json={full_json}")
-                resp_id = _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
+                response_id = _finish_tool(
+                    response_id,
+                    thread_id,
+                    run_id,
+                    iid,
+                    buf[iid]["name"],
+                    full_json,
+                    q,
+                )
                 buf.pop(iid, None)
 
-        # required_action (старый fallback)
-        act = getattr(ev, "required_action", None)
-        if act and getattr(act, "submit_tool_outputs", None):
-            print("DBG |   required_action submit_tool_outputs")
-            outs = [{"tool_call_id": tc.id,
-                     "output": _run_tool(tc.name, tc.args)}
-                    for tc in act.submit_tool_outputs.tool_calls]
-            follow = client.responses.submit_tool_outputs(
-                response_id=ev.id, tool_outputs=outs, stream=True)
-            resp_id = _pipe(follow, q)
-
-        # финальные маркеры
-        if typ in ("response.done", "response.completed", "response.output_text.done"):
+        # Final markers
+        if typ in (
+            "response.done",
+            "response.completed",
+            "response.output_text.done",
+        ):
             print(f"DBG | PIPE FINISH — {typ}")
             q.put(None)
-            return resp_id
+            return response_id
 
     print("DBG | PIPE END without explicit done")
     q.put(None)
-    return resp_id
-    
+    return response_id
+
+
 # ─────────────────── 5. SSE ──────────────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
+    """Simple Server-Sent Events generator with keep-alive pings."""
     keep = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
-            if tok is None: yield b"event: done\ndata: [DONE]\n\n"; break
-            yield f"data: {tok}\n\n".encode(); keep = time.time() + 20
+            if tok is None:
+                yield b"event: done\ndata: [DONE]\n\n"
+                break
+            yield f"data: {tok}\n\n".encode()
+            keep = time.time() + 20
         except queue.Empty:
             if time.time() > keep:
-                yield b": ping\n\n"; keep = time.time() + 20
+                yield b": ping\n\n"
+                keep = time.time() + 20
+
 
 # ─────────────────── 6. CHAT ENDPOINT ───────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    msg = (request.json or {}).get("message","").strip()
-    if not msg: return jsonify({"error":"Empty message"}),400
-    last = session.get("prev_response_id"); q: queue.Queue[str|None]=queue.Queue()
+    msg = (request.json or {}).get("message", "").strip()
+    if not msg:
+        return jsonify({"error": "Empty message"}), 400
+
+    last_resp_id = session.get("prev_response_id")
+    q: queue.Queue[str | None] = queue.Queue()
 
     @copy_current_request_context
-    def work():
-        stream = client.responses.create(model=MODEL,input=msg,previous_response_id=last,
-                                         tools=TOOLS,stream=True)
+    def work() -> None:
+        stream = client.responses.create(
+            model=MODEL,
+            input=msg,
+            previous_response_id=last_resp_id,
+            tools=TOOLS,
+            stream=True,
+        )
         session["prev_response_id"] = _pipe(stream, q)
 
     threading.Thread(target=work, daemon=True).start()
-    return Response(sse(q), mimetype="text/event-stream",
-                    headers={"X-Accel-Buffering":"no","Cache-Control":"no-cache"})
+    return Response(
+        sse(q),
+        mimetype="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
-# ─────────────────── 7. CSV / CRUD (оставьте как было) ───────
+
+# ─────────────────── 7. CSV / CRUD (unchanged) ───────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -302,8 +442,12 @@ def index():
         db.session.add_all(new_clients.values())
         db.session.add_all(invoices)
         db.session.commit()
-        log.info("CSV import %d invoices, %d new clients %.3f s",
-                 len(invoices), len(new_clients), time.perf_counter() - t0)
+        log.info(
+            "CSV import %d invoices, %d new clients %.3f s",
+            len(invoices),
+            len(new_clients),
+            time.perf_counter() - t0,
+        )
         flash("Invoices uploaded successfully.")
         return redirect("/")
     return render_template("index.html", invoices=Invoice.query.all())
@@ -342,7 +486,11 @@ def delete_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
-    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
+    rows = (
+        [Invoice.query.get_or_404(invoice_id)]
+        if invoice_id
+        else Invoice.query.all()
+    )
     csv_data = pd.DataFrame(
         [
             {
@@ -362,12 +510,14 @@ def export_invoice(invoice_id: int | None = None):
     return (
         csv_data,
         200,
-        {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename="{fname}"'},
+        {
+            "Content-Type": "text/csv",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        },
     )
 
 
 # ─────────────────── 8. RUN ──────────────────────────────────
 if __name__ == "__main__":
-    print(openai.__version__)
+    print(client.__version__)  # shows 1.78.0+
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
