@@ -1,46 +1,42 @@
 /* main.js */
-/* Comments in English as requested. --------------------------------------------------
-   NEW  ➜ Added real-time streaming chat support (/chat/stream, Server-Sent Events)
-   Everything else from the previous file is preserved.
+/* Comments in English as requested. -------------------------------------------
+   Streaming chat (SSE) + file-drop, animations, invoice edit, auto-theme, etc.
+   NEW ➜ Added:
+     • chatBusy flag to block sending while AI is thinking
+     • animated "…" during assistant typing
 ------------------------------------------------------------------------------- */
 
 /* --------------------------------
    DRAG-AND-DROP FOR CSV FILES
 ----------------------------------- */
 let dragCounter = 0;
-function handleDragOver(e) {
-  e.preventDefault();
-}
+function handleDragOver(e) { e.preventDefault(); }
 function handleDragLeave(e) {
-  e.preventDefault();
-  dragCounter--;
-  if (dragCounter === 0) {
-    document.getElementById('drop-area').style.display = 'none';
-  }
+  e.preventDefault(); dragCounter--;
+  if (dragCounter === 0) document.getElementById('drop-area').style.display = 'none';
 }
 document.addEventListener('dragenter', (e) => {
-  e.preventDefault();
-  dragCounter++;
+  e.preventDefault(); dragCounter++;
   document.getElementById('drop-area').style.display = 'flex';
 });
 function handleDrop(e) {
-  e.preventDefault();
-  dragCounter = 0;
+  e.preventDefault(); dragCounter = 0;
   document.getElementById('drop-area').style.display = 'none';
-
-  const files = e.dataTransfer.files;
-  if (files.length && files[0].type === 'text/csv') {
-    const formData = new FormData();
-    formData.append('csv_file', files[0]);
-    fetch('/', { method: 'POST', body: formData })
-      .then((resp) => { if (!resp.ok) throw new Error('Upload failed'); location.reload(); })
+  const f = e.dataTransfer.files;
+  if (f.length && f[0].type === 'text/csv') {
+    const fd = new FormData(); fd.append('csv_file', f[0]);
+    fetch('/', { method: 'POST', body: fd })
+      .then(r => { if (!r.ok) throw new Error(); location.reload(); })
       .catch(() => alert('Upload failed'));
-  } else { alert('Please drop a valid CSV file.'); }
+  } else alert('Please drop a valid CSV file.');
 }
+document.addEventListener('dragover', handleDragOver);
+document.addEventListener('dragleave', handleDragLeave);
+document.addEventListener('drop', handleDrop);
 
 function toggleInvoices() {
-  const tbl = document.getElementById('invoiceTable');
-  tbl.style.display = (tbl.style.display === 'none') ? 'block' : 'none';
+  const t = document.getElementById('invoiceTable');
+  t.style.display = (t.style.display === 'none') ? 'block' : 'none';
 }
 
 /* --------------------------------
@@ -48,9 +44,7 @@ function toggleInvoices() {
 ----------------------------------- */
 document.querySelectorAll('.fade').forEach(el => {
   const io = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) { entry.target.classList.add('show'); io.unobserve(entry.target); }
-    });
+    if (entries[0].isIntersecting) { el.classList.add('show'); io.unobserve(el); }
   }, { threshold: 0.3 });
   io.observe(el);
 });
@@ -58,34 +52,31 @@ document.querySelectorAll('.fade').forEach(el => {
 /* --------------------------------
    TOAST NOTIFICATIONS
 ----------------------------------- */
-function showToast(message) {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.classList.add('toast');
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => container.removeChild(toast), 800); }, 3000);
+function showToast(msg) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg; c.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => c.removeChild(t), 800); }, 3000);
 }
 
 /* --------------------------------
    SAVE INVOICE
 ----------------------------------- */
-async function saveInvoice(event, invoiceId) {
-  event.preventDefault();
+async function saveInvoice(e, id) {
+  e.preventDefault();
   try {
-    const formData = new FormData(event.target);
-    const res = await fetch(`/edit/${invoiceId}`, { method: 'POST', body: formData });
-    if (!res.ok) throw new Error('Network response was not ok');
-
-    const d = await res.json();
-    document.getElementById(`invoice-${invoiceId}-client`).textContent   = d.client_name;
-    document.getElementById(`invoice-${invoiceId}-invoiceID`).textContent = d.invoice_id;
-    document.getElementById(`invoice-${invoiceId}-amount`).textContent    = `$${parseFloat(d.amount).toFixed(2)}`;
-    document.getElementById(`invoice-${invoiceId}-due`).textContent       = d.date_due;
-    document.getElementById(`invoice-${invoiceId}-status`).textContent    = d.status;
-    document.getElementById(`edit-row-${invoiceId}`).style.display = 'none';
+    const fd = new FormData(e.target);
+    const r  = await fetch(`/edit/${id}`, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    document.getElementById(`invoice-${id}-client`).textContent    = d.client_name;
+    document.getElementById(`invoice-${id}-invoiceID`).textContent = d.invoice_id;
+    document.getElementById(`invoice-${id}-amount`).textContent     = `$${(+d.amount).toFixed(2)}`;
+    document.getElementById(`invoice-${id}-due`).textContent        = d.date_due;
+    document.getElementById(`invoice-${id}-status`).textContent     = d.status;
+    document.getElementById(`edit-row-${id}`).style.display = 'none';
     showToast('Invoice updated successfully!');
-  } catch (err) { console.error(err); showToast('Error updating invoice.'); }
+  } catch { showToast('Error updating invoice.'); }
 }
 function toggleEdit(id) {
   const row = document.getElementById(`edit-row-${id}`);
@@ -95,22 +86,21 @@ function toggleEdit(id) {
 /* --------------------------------
    TYPE EFFECT & TERMINAL SIMULATIONS
 ----------------------------------- */
-function typeInto(el, text, speed = 60, cb) {
+function typeInto(el, txt, speed = 60, cb) {
   let i = 0;
   (function t() {
-    if (i < text.length) {
-      if (el.placeholder) el.placeholder = text.slice(0, i + 1);
-      else el.value += text[i];
-      i++; setTimeout(t, speed);
+    if (i < txt.length) {
+      if ('placeholder' in el) el.placeholder = txt.slice(0, ++i);
+      else el.value += txt[i++ - 1];
+      setTimeout(t, speed);
     } else if (cb) cb();
   })();
 }
 function printLines(id, lines, delay = 900) {
-  const t = document.getElementById(id);
-  let i = 0;
+  const tgt = document.getElementById(id); let i = 0;
   (function n() {
-    if (i < lines.length) { t.innerHTML += lines[i] + '<br>'; i++; setTimeout(n, delay); }
-    else t.innerHTML += '<span class="cursor"></span>';
+    if (i < lines.length) { tgt.innerHTML += lines[i++] + '<br>'; setTimeout(n, delay); }
+    else tgt.innerHTML += '<span class="cursor"></span>';
   })();
 }
 const obs = (sel, cb) => {
@@ -119,11 +109,8 @@ const obs = (sel, cb) => {
   io.observe(el);
 };
 
-/* Trigger demo animations once in view */
+/* Demo animations */
 obs('#demo', () => {
-  const companyField = document.getElementById('companyField');
-  const reportField  = document.getElementById('reportField');
-  const dateField    = document.getElementById('dateField');
   typeInto(companyField, 'Acme Corporation', 60, () => {
     setTimeout(() => typeInto(reportField, 'Q4 Revenue Report'), 300);
     setTimeout(() => typeInto(dateField,  '31 Jan 2025'),       800);
@@ -158,31 +145,30 @@ obs('#actions', () => {
    CRACK GLASS ANIMATION
 ----------------------------------- */
 function crackGlass() {
-  const block  = document.getElementById('ai-extract-block');
-  const canvas = document.getElementById('crack-effect');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d'); if (!ctx) return;
+  const block = document.getElementById('ai-extract-block');
+  const cv    = document.getElementById('crack-effect'); if (!cv) return;
+  const ctx   = cv.getContext('2d'); if (!ctx) return;
 
-  canvas.style.transition = ''; canvas.style.opacity = '1'; canvas.style.display = 'block';
-  canvas.width = 300; canvas.height = 200; ctx.clearRect(0, 0, canvas.width, canvas.height);
+  cv.style.display = 'block'; cv.style.opacity = '1'; cv.style.transition = '';
+  cv.width = 300; cv.height = 200; ctx.clearRect(0, 0, cv.width, cv.height);
 
-  if (navigator.vibrate) navigator.vibrate([100, 50, 100, 30, 100]);
+  navigator.vibrate?.([100, 50, 100]);
   block.classList.add('vibrate'); setTimeout(() => block.classList.remove('vibrate'), 700);
 
-  const cx = canvas.width / 2, cy = canvas.height / 2;
+  const [cx, cy] = [cv.width / 2, cv.height / 2];
   for (let i = 0; i < 24; i++) {
-    const angle = (Math.PI * 2 * i) / 24, len = 50 + Math.random() * 100;
-    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
-    ctx.strokeStyle = `rgba(100,100,100,${0.5 + Math.random() * 0.5})`;
-    ctx.lineWidth   = 0.5 + Math.random() * 2; ctx.stroke();
+    const ang = i * Math.PI * 2 / 24, len = 50 + Math.random() * 100;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ang)*len, cy + Math.sin(ang)*len);
+    ctx.strokeStyle = `rgba(100,100,100,${0.5+Math.random()*0.5})`;
+    ctx.lineWidth   = 0.5 + Math.random()*2; ctx.stroke();
   }
   for (let r = 20; r <= 100; r += 20) {
-    ctx.beginPath(); ctx.arc(cx, cy, r + Math.random() * 5, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(120,120,120,${Math.random() * 0.4 + 0.3})`;
+    ctx.beginPath(); ctx.arc(cx, cy, r + Math.random()*5, 0, Math.PI*2);
+    ctx.strokeStyle = `rgba(120,120,120,${Math.random()*0.4+0.3})`;
     ctx.lineWidth   = 0.3 + Math.random(); ctx.stroke();
   }
-  setTimeout(() => { canvas.style.transition = 'opacity 0.8s ease'; canvas.style.opacity = '0';
-    setTimeout(() => { canvas.style.display = 'none'; canvas.style.opacity = '1'; canvas.style.transition = ''; }, 800);
+  setTimeout(() => { cv.style.transition = 'opacity .8s'; cv.style.opacity = '0';
+    setTimeout(() => { cv.style.display = 'none'; cv.style.transition = ''; }, 800);
   }, 1300);
 }
 
@@ -192,8 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chatBox.style.height  = 'auto';
   chatBox.querySelector('.messages').style.maxHeight = '300px';
 
-  const expandBtn = document.getElementById('expand-chat');
-  if (expandBtn) expandBtn.addEventListener('click', () => {
+  document.getElementById('expand-chat')?.addEventListener('click', () => {
     if (chatBox.style.width === '600px') {
       chatBox.style.width = '340px'; chatBox.style.height = 'auto';
       chatBox.querySelector('.messages').style.maxHeight = '300px';
@@ -203,101 +188,111 @@ document.addEventListener('DOMContentLoaded', () => {
       chatBox.querySelector('.messages').style.maxHeight = '';
     }
   });
-
-  const aiCard = document.getElementById('ai-extract-block');
-  if (aiCard) aiCard.addEventListener('click', crackGlass);
+  document.getElementById('ai-extract-block')?.addEventListener('click', crackGlass);
 });
 
 /* --------------------------------
-   CHAT LAUNCHER & SEND BUTTON
+   CHAT
 ----------------------------------- */
 const launcher  = document.getElementById('chat-launcher');
 const chatBox   = document.getElementById('chat-box');
 const chatInput = chatBox.querySelector('textarea');
 const sendBtn   = chatBox.querySelector('button.send');
+const USE_STREAM = true;
 
-const USE_STREAM = true;   // Toggle SSE streaming
+let chatBusy = false;          // NEW – flag
 
-/* Append a message to chat; returns the created element */
-function addMessage(text, className = 'message') {
-  const div = document.createElement('div');
-  div.className = className;
-  div.textContent = text;
-  chatBox.querySelector('.messages').appendChild(div);
-  chatBox.querySelector('.messages').scrollTop =
-    chatBox.querySelector('.messages').scrollHeight;
-  return div;
+function addMessage(text, cls = 'message') {
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = text;
+  const msgPane = chatBox.querySelector('.messages');
+  msgPane.appendChild(d);
+  msgPane.scrollTop = msgPane.scrollHeight;
+  return d;
 }
 
-/* Toggle chat box visibility */
 launcher.addEventListener('click', () => {
-  chatBox.style.display = chatBox.style.display === 'flex' ? 'none' : 'flex';
-  chatBox.style.flexDirection = 'column';
+  if (chatBox.style.display === 'flex') { chatBox.style.display = 'none'; return; }
+  chatBox.style.display = 'flex'; chatBox.style.flexDirection = 'column';
   chatInput.disabled = false; sendBtn.disabled = false; chatInput.focus();
 });
 
-/* Send message (click or Enter) */
+/* Ellipsis animation helpers ---------------------------- */
+function startEllipsis(el) {               // NEW
+  let dots = 1;
+  el.textContent = '.';
+  el._ellipsis = setInterval(() => {
+    dots = (dots % 3) + 1;
+    el.textContent = '.'.repeat(dots);
+  }, 400);
+}
+function stopEllipsis(el) {                // NEW
+  clearInterval(el._ellipsis); delete el._ellipsis;
+}
+
+/* Send message ------------------------------------------ */
 async function sendMessage() {
   const message = chatInput.value.trim();
-  if (!message) return;
+  if (!message || chatBusy) return;        // NEW – block if busy
+
+  chatBusy = true;                         // NEW
+  chatInput.disabled = true; sendBtn.disabled = true;
 
   addMessage(message, 'message');          // user bubble
   chatInput.value = '';
-  chatInput.focus();
 
-  // Assistant placeholder bubble
-  let assistantDiv = addMessage('', 'message typing');
+  const aiDiv = addMessage('', 'message typing');
+  startEllipsis(aiDiv);                    // NEW
 
-  // Helper to stream chunks into the bubble
-  function pushChunk(chunk) {
-    assistantDiv.textContent += chunk;
+  const pushChunk = (chunk) => {
+    if (aiDiv.classList.contains('typing')) {
+      stopEllipsis(aiDiv); aiDiv.textContent = ''; aiDiv.classList.remove('typing');
+    }
+    aiDiv.textContent += chunk;
     chatBox.querySelector('.messages').scrollTop =
       chatBox.querySelector('.messages').scrollHeight;
-  }
+  };
 
   try {
     if (USE_STREAM) {
-      /* -------- STREAMING IMPLEMENTATION (SSE via fetch) -------- */
       const res = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message })
       });
       if (!res.ok || !res.body) throw new Error('Network error');
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
+      const rdr = res.body.getReader(), dec = new TextDecoder();
+      let buf = '';
       while (true) {
-        const { value, done } = await reader.read();
+        const { value, done } = await rdr.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // Split on double LF (end of SSE block)
-        const parts = buffer.split('\n\n');
-        buffer = parts.pop();               // keep last incomplete
-        for (let part of parts) {
-          if (part.startsWith('event: done')) { reader.cancel(); break; }
-          const dataLine = part.split('\n').find(l => l.startsWith('data:'));
-          if (dataLine) pushChunk(dataLine.slice(6));
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for (const p of parts) {
+          if (p.startsWith('event: done')) { rdr.cancel(); break; }
+          const line = p.split('\n').find(l => l.startsWith('data:'));
+          if (line) pushChunk(line.slice(6));
         }
       }
     } else {
-      /* -------- Classic single-shot endpoint -------- */
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message })
       });
       const d = await res.json();
-      assistantDiv.textContent = d.response || d.error || 'No response';
+      stopEllipsis(aiDiv);
+      aiDiv.textContent = d.response || d.error || 'No response';
     }
   } catch (err) {
     console.error(err);
-    assistantDiv.textContent = 'Error contacting server';
+    stopEllipsis(aiDiv);
+    aiDiv.textContent = 'Error contacting server';
   } finally {
-    assistantDiv.classList.remove('typing');
+    chatBusy = false;                      // NEW
+    chatInput.disabled = false; sendBtn.disabled = false;
+    aiDiv.classList.remove('typing');
+    chatInput.focus();
   }
 }
 
@@ -309,19 +304,17 @@ chatInput.addEventListener('keydown', (e) => {
 /* --------------------------------
    AUTO THEME (LIGHT / NIGHT)
 ----------------------------------- */
-(function autoTheme() {
+(function () {
   const hour = new Date().getHours();
   if (hour >= 19 || hour < 6) {
     document.body.classList.add('night-theme');
-    const stars = document.getElementById('star-background');
-    if (stars) stars.style.display = 'block';
+    document.getElementById('star-background')?.style.setProperty('display', 'block');
   }
 })();
-const themeBtn = document.getElementById('theme-toggle');
-if (themeBtn) themeBtn.addEventListener('click', () => {
+document.getElementById('theme-toggle')?.addEventListener('click', () => {
   const body = document.body;
   const stars = document.getElementById('star-background');
-  const isNight = body.classList.toggle('night-theme');
-  if (stars) stars.style.display = isNight ? 'block' : 'none';
-  localStorage.setItem('theme', isNight ? 'night' : 'light');
+  const night = body.classList.toggle('night-theme');
+  if (stars) stars.style.display = night ? 'block' : 'none';
+  localStorage.setItem('theme', night ? 'night' : 'light');
 });
