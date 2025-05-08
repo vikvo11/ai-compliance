@@ -169,12 +169,10 @@ TOOLS = [
 # 3.  SHARED HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
-    """Ensure there is an OpenAI thread ID stored in the Flask session."""
+    """Return a thread ID stored in the Flask session, creating one if needed."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
         print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
-    else:
-        print(f"[DEBUG] Using existing thread ID: {session['thread_id']}")
     return session["thread_id"]
 
 
@@ -189,20 +187,23 @@ def _run_tool(c: Any) -> str:
     return f"Unknown tool {fn}"
 
 
-def _wait_for_active_run(tid: str, timeout: float = 30.0) -> None:
-    """Block until the last run in the thread is finished or timeout is reached."""
+def _wait_until_no_active_runs(tid: str, timeout: float = 60.0) -> None:
+    """
+    Block until the thread has **no** active runs.
+    A run is active if its status not in {completed, failed, cancelled, expired}.
+    """
     done = {"completed", "failed", "cancelled", "expired"}
-    runs = client.beta.threads.runs.list(thread_id=tid, limit=1)
-    if not runs.data:
-        return
-
-    run = runs.data[0]
     end_at = time.time() + timeout
-    while run.status not in done:
+
+    while True:
+        runs = client.beta.threads.runs.list(thread_id=tid, limit=20).data
+        active = [r for r in runs if r.status not in done]
+        if not active:
+            return  # nothing is running
         if time.time() > end_at:
-            raise RuntimeError(f"Previous run '{run.id}' is still active.")
+            ids = ", ".join(r.id for r in active)
+            raise RuntimeError(f"Thread still has active runs: {ids}")
         time.sleep(0.35)
-        run = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4.  WEB ROUTES  (index / delete / edit / export)
@@ -302,7 +303,7 @@ def chat_sync():
 
     tid = ensure_thread()
     try:
-        _wait_for_active_run(tid)
+        _wait_until_no_active_runs(tid)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 429
 
@@ -416,7 +417,7 @@ def chat_stream():
 
     tid = ensure_thread()
     try:
-        _wait_for_active_run(tid)
+        _wait_until_no_active_runs(tid)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 429
 
