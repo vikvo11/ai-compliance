@@ -178,52 +178,36 @@ def _run_tool(name: str, args: str) -> str:
 
 def _finish_tool(
     response_id: str,
-    thread_id: str | None,
-    run_id: str | None,
+    thread_id: str | None,           # not used in Responses-flow
+    run_id: str | None,              # not used in Responses-flow
     tool_call_id: str,
     name: str,
     args_json: str,
     q: queue.Queue[str | None],
 ) -> str:
-    """Execute a tool, send its output to OpenAI, and continue streaming."""
+    """Execute the tool, send its output back via Responses API, keep streaming."""
     log.info("RUN tool=%s id=%s args=%s", name, tool_call_id, args_json)
     print(f"DBG | RUN tool={name} id={tool_call_id}")
 
+    # 1) run local Python function
     output = _run_tool(name, args_json)
 
-    # ── 1. Assistants-style endpoint (thread/run IDs уже есть) ────────────
-    if thread_id and run_id:
-        follow = client.beta.threads.runs.submit_tool_outputs(
-            thread_id=thread_id,
-            run_id=run_id,
-            tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
-            stream=True,
-        )
-        return _pipe(follow, q, thread_id, run_id)
-
-    # ── 2. Responses-style endpoint (SDK 1.78+) ───────────────────────────
-    if hasattr(client.responses, "submit_tool_outputs"):
+    # 2) hand result to OpenAI — ONLY through Responses.submit_tool_outputs
+    try:
         follow = client.responses.submit_tool_outputs(
             response_id=response_id,
             tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
-            stream=True,
+            stream=True,                     # keep SSE stream alive
         )
-        return _pipe(follow, q, thread_id, run_id)
+    except AttributeError:
+        # Your SDK is too old / too new?   Give a clear error to logs & user
+        err_msg = "[internal error: Responses.submit_tool_outputs() not found]"
+        log.exception(err_msg)
+        q.put(f"\n{err_msg}\n")
+        q.put(None)
+        return response_id
 
-    # ── 3.  Fallback for very old SDKs (ручной POST) ──────────────────────
-    try:
-        from openai.resources.responses import ResponseObject as Cast
-    except ImportError:
-        Cast = dict
-
-    legacy_path = f"responses/{response_id}/tool_outputs"
-    print(f"DBG |   fallback POST {legacy_path}")
-    follow = client.post(
-        legacy_path,
-        body={"tool_outputs": [{"tool_call_id": tool_call_id, "output": output}]},
-        stream=True,
-        cast_to=Cast,
-    )
+    # 3) continue parsing the follow-up stream
     return _pipe(follow, q, thread_id, run_id)
 
 
