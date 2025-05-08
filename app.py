@@ -94,50 +94,41 @@ def _run_tool(name: str, args: str) -> str:
 
 # ─────────── replace the whole _pipe() definition with this ───────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
-    """
-    Stream tokens → queue. Executes tool calls when аргументы готовы.
-    Поддерживает обе схемы: старую (required_action) и новую (tool_calls.done).
-    Возвращает последний response_id.
-    """
     resp_id = ""
-    buf: dict[str, dict] = {}        # id → {"name": str, "parts": list[str]}
+    buf: dict[str, dict] = {}          # id → {"name": str, "parts": list[str]}
 
     for ev in stream:
-        # keep latest response_id to resume later
+        typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
+
+        # сохраняем id для resume
         if getattr(ev, "response", None):
             resp_id = ev.response.id
 
-        # normal text token
-        if isinstance(getattr(ev, "delta", None), str):
+        # ───── выводим ТОЛЬКО текстовые дельты ────────────────
+        if typ == "response.output_text.delta" and isinstance(ev.delta, str):
             q.put(ev.delta)
 
-        # ───── 1. NEW SCHEMA: response.tool_calls ─────────────
+        # ───── новая схема: declaration tool_calls ────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
-                buf[tc.id] = {
-                    "name": getattr(tc.function, "name", getattr(tc, "name", "")),
-                    "parts": []
-                }
-                # if full args already present, run immediately
+                buf[tc.id] = {"name": tc.function.name, "parts": []}
                 full = getattr(tc.function, "arguments", None)
                 if full:
-                    out = _run_tool(buf[tc.id]["name"], full)
+                    out = _run_tool(tc.function.name, full)
                     follow = client.responses.submit_tool_outputs(
                         response_id=resp_id,
                         tool_outputs=[{"tool_call_id": tc.id, "output": out}],
                         stream=True,
                     )
                     resp_id = _pipe(follow, q)
-                    buf.pop(tc.id, None)
 
-        # streamed arguments
-        typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
+        # ───── поток аргументов ───────────────────────────────
         if "arguments.delta" in typ:
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
             if tc_id and tc_id in buf:
                 buf[tc_id]["parts"].append(ev.delta or "")
 
-        # arguments done → run tool
+        # ───── аргументы закончились — вызываем функцию ───────
         if typ.endswith("arguments.done"):
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
             if tc_id and tc_id in buf:
@@ -151,7 +142,7 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 resp_id = _pipe(follow, q)
                 buf.pop(tc_id, None)
 
-        # ───── 2. OLD SCHEMA: required_action ────────────────
+        # ───── старая схема: required_action ──────────────────
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
             outs = []
@@ -162,7 +153,7 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 response_id=ev.id, tool_outputs=outs, stream=True)
             resp_id = _pipe(follow, q)
 
-        # final markers
+        # ───── финальные маркеры ──────────────────────────────
         if typ in ("response.done", "response.completed", "response.output_text.done"):
             q.put(None)
             return resp_id
