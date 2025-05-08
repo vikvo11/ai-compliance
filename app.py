@@ -15,7 +15,8 @@ import logging
 from collections.abc import Generator
 from typing import Any
 
-import httpx                     # faster HTTP client, keep-alive
+import httpx
+from httpx import Limits, Timeout
 from flask import (
     Flask, render_template, request, redirect,
     flash, jsonify, session, Response
@@ -26,7 +27,7 @@ import openai
 import configparser
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 0.  LOGGING (ISO-8601 → stdout)
+# 0. LOGGING (ISO-8601 → stdout)
 # ──────────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -38,7 +39,7 @@ logging.basicConfig(
 log = logging.getLogger("app")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1.  ENV & OPENAI
+# 1. ENV & OPENAI
 # ──────────────────────────────────────────────────────────────────────────────
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
@@ -61,7 +62,7 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  FLASK & DB
+# 2. FLASK & DB
 # ──────────────────────────────────────────────────────────────────────────────
 os.makedirs("/app/data", exist_ok=True)
 
@@ -71,7 +72,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////app/data/data.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
-
+# (models unchanged) ──────────────────────────────────────────────────────────
 class Client(db.Model):
     __tablename__ = "client"
     id = db.Column(db.Integer, primary_key=True)
@@ -97,32 +98,49 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS (sync, keep-alive reuse)
+# 3. ASSISTANT TOOLS  (thread-local httpx.Client)
 # ──────────────────────────────────────────────────────────────────────────────
-HTTP_TIMEOUT = httpx.Timeout(6.0)
-sync_client = httpx.Client(timeout=HTTP_TIMEOUT)
+HTTP_TIMEOUT = Timeout(6.0)
+_HTTP_LIMITS = Limits(max_keepalive_connections=20, max_connections=50)
+_tls = threading.local()
+
+
+def _get_client() -> httpx.Client:
+    """Return thread-local httpx.Client (keep-alive, but no cross-thread races)."""
+    if not hasattr(_tls, "client"):
+        _tls.client = httpx.Client(timeout=HTTP_TIMEOUT, limits=_HTTP_LIMITS)
+    return _tls.client
 
 
 @functools.lru_cache(maxsize=2048)
 def _coords_for(city: str) -> tuple[float, float] | None:
+    cli = _get_client()
     t0 = time.perf_counter()
-    resp = sync_client.get(
+    resp = cli.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": city, "count": 1},
     )
-    res = resp.json().get("results")
+    try:
+        res = resp.json().get("results")
+    finally:
+        resp.close()
     log.debug("geocode '%s' %.3f s", city, time.perf_counter() - t0)
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
 def _weather_for(lat: float, lon: float) -> dict:
+    cli = _get_client()
     t0 = time.perf_counter()
-    resp = sync_client.get(
+    resp = cli.get(
         "https://api.open-meteo.com/v1/forecast",
         params={"latitude": lat, "longitude": lon, "current_weather": True},
     )
+    try:
+        data = resp.json().get("current_weather", {})
+    finally:
+        resp.close()
     log.debug("weather API %.3f s", time.perf_counter() - t0)
-    return resp.json().get("current_weather", {})
+    return data
 
 
 def get_current_weather(location: str, unit: str = "celsius") -> str:
@@ -157,6 +175,7 @@ def get_invoice_by_id(invoice_id: str) -> dict:
 
 
 TOOLS = [
+    # (unchanged)
     {
         "type": "function",
         "function": {
