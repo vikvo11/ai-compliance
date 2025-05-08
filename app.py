@@ -92,37 +92,38 @@ def _run_tool(name: str, args: str) -> str:
     fn = DISPATCH.get(name); res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
-# ─── helper ──────────────────────────────────────────────────
+# ─── helper: выполнить функцию и продолжить поток ────────────
 def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
                  q: queue.Queue[str | None]) -> str:
-    log.info("  RUN tool %s  id=%s  args=%s", name, tc_id, args_json)
+    log.info("RUN  tool=%s  id=%s  args=%s", name, tc_id, args_json)
     out = _run_tool(name, args_json)
     follow = client.responses.submit_tool_outputs(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    return _pipe(follow, q)      # рекурсивно продолжаем поток
+    return _pipe(follow, q)      # рекурсивно продолжаем стрим
 
 
-# ─── main stream parser ──────────────────────────────────────
+# ─── основной парсер потока ──────────────────────────────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
     resp_id = ""
-    buf: dict[str, dict] = {}     # id → {"name": str, "parts": []}
+    buf: dict[str, dict] = {}    # id → {"name": str, "parts": list[str]}
 
     for ev in stream:
-        typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
+        typ   = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
         delta = getattr(ev, "delta", None)
-        log.info("▶ %s  delta=%s", typ, bool(delta))
+        log.info("▶ %s   delta=%s", typ, bool(delta))
 
+        # запоминаем последний response.id
         if getattr(ev, "response", None):
             resp_id = ev.response.id
 
-        # plain text
+        # текстовые токены (игнорируем куски JSON-аргументов)
         if isinstance(delta, str) and "arguments" not in typ:
             q.put(delta)
 
-        # ── 1. «старая» схема: response.tool_calls ────────────
+        # ── 1. старая ветка: response.tool_calls ───────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
@@ -130,46 +131,42 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 if full:
                     resp_id = _finish_tool(resp_id, tc.id, tc.function.name, full, q)
 
-        # ── 2. «новая» схема: output_item.added + …arguments.* ─
+        # ── 2. новая ветка: output_item.added → arguments.* ────
         if typ == "response.output_item.added":
-            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None)
-            if not item_obj:
-                # старый SDK → пытаемся через model_dump
-                item_obj = ev.model_dump(exclude_none=True).get("item")
-            if item_obj:
-                item = item_obj if isinstance(item_obj, dict) else item_obj.model_dump(exclude_none=True)
-                iid = item["id"]
-                if item["type"] == "function_call":
-                    fname = item["function"]["name"]
-                elif item["type"] == "tool_call":
-                    fname = item["tool_call"]["name"]
-                else:
-                    fname = None
-                if fname:
-                    buf[iid] = {"name": fname, "parts": []}
-                    log.info("  item declared id=%s func=%s", iid, fname)
+            # достаём pydantic-item и приводим к dict
+            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
+                       or ev.model_dump(exclude_none=True).get("item")
+            item = item_obj if isinstance(item_obj, dict) else \
+                   item_obj.model_dump(exclude_none=True)
+            if item and item.get("type") in ("function_call", "tool_call"):
+                iid   = item["id"]
+                fname = item["function"]["name"] if item["type"] == "function_call" \
+                        else item["tool_call"]["name"]
+                buf[iid] = {"name": fname, "parts": []}
+                log.info("  declare id=%s func=%s", iid, fname)
 
-        # собираем части JSON-аргументов
-        if any(s in typ for s in ("function_call_arguments.delta", "tool_call_arguments.delta", "arguments.delta")):
-            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
+        # накапливаем кусочки JSON-аргументов
+        if "arguments.delta" in typ:
+            iid = getattr(ev, "output_item_id", None) \
+                  or getattr(ev, "item_id", None) \
                   or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
-        # последний кусок
-        if typ.endswith(("function_call_arguments.done", "tool_call_arguments.done", "arguments.done")):
-            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
+        # закрытие аргументов → исполняем
+        if typ.endswith("arguments.done"):
+            iid = getattr(ev, "output_item_id", None) \
+                  or getattr(ev, "item_id", None) \
                   or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
                 resp_id = _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
                 buf.pop(iid, None)
 
-        # ── 3. fallback: required_action.submit_tool_outputs ──
+        # ── 3. very old: required_action.submit_tool_outputs ───
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
-            outs = [{"tool_call_id": tc.id,
-                     "output": _run_tool(tc.name, tc.args)}
+            outs = [{"tool_call_id": tc.id, "output": _run_tool(tc.name, tc.args)}
                     for tc in act.submit_tool_outputs.tool_calls]
             follow = client.responses.submit_tool_outputs(
                 response_id=ev.id, tool_outputs=outs, stream=True)
