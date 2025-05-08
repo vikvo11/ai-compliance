@@ -191,6 +191,18 @@ def _finish_tool(  # noqa: C901
 
     output = _run_tool(name, args_json)
 
+    # Use Beta endpoint **only** when IDs are present
+    if thread_id and run_id and hasattr(client.beta.threads.runs, "submit_tool_outputs"):
+        follow = client.beta.threads.runs.submit_tool_outputs(
+            thread_id=thread_id,
+            run_id=run_id,
+            tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
+            stream=True,
+        )
+        return _pipe(follow, q, thread_id, run_id)
+
+    # otherwise fall back to Responses-style submit_tool_outputs  …
+
     # Preferred path for SDK >= 1.78
     if hasattr(client.beta.threads.runs, "submit_tool_outputs"):
         follow = client.beta.threads.runs.submit_tool_outputs(
@@ -262,6 +274,11 @@ def _pipe(  # noqa: C901
     for ev in stream:
         typ = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
         delta = getattr(ev, "delta", None)
+        
+        # NEW: catch IDs that may already be on the event itself
+        thread_id = getattr(ev, "thread_id", thread_id)
+        run_id    = getattr(ev, "run_id", run_id)
+        
         log.info("▶ %s   delta=%s", typ, bool(delta))
         print(f"DBG | ▶ {typ:40} delta={bool(delta)}")
 
