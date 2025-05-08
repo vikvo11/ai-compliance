@@ -1,26 +1,24 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, new SDK)
+# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, SDK >= 1.17)
 from __future__ import annotations
 
-import os
-import time
 import json
+import os
 import queue
-import threading
-import requests
 import sys
-import configparser
-from collections.abc import Sequence, Generator
+import threading
+import time
+from collections.abc import Generator, Sequence
 from typing import Any, Optional
 
-from flask import (
-    Flask, render_template, request, redirect,
-    flash, jsonify, session, Response
-)
-from flask_sqlalchemy import SQLAlchemy
-import pandas as pd
+import configparser
+import requests
 import openai
+import pandas as pd
+from flask import (Flask, Response, flash, jsonify, redirect, render_template,
+                   request, session)
+from flask_sqlalchemy import SQLAlchemy
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 0.  ENV & OPENAI
@@ -84,9 +82,7 @@ with app.app_context():
 # 2.  ASSISTANT TOOLS
 # ──────────────────────────────────────────────────────────────────────────────
 def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """
-    Return a short string with the current weather for the location.
-    """
+    """Return a short string with the current weather for the location."""
     try:
         print(f"[DEBUG] get_current_weather({location=}, {unit=})")
         geo = requests.get(
@@ -99,8 +95,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
         lat, lon = geo[0]["latitude"], geo[0]["longitude"]
         cw = requests.get(
             "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon,
-                    "current_weather": True},
+            params={"latitude": lat, "longitude": lon, "current_weather": True},
             timeout=5,
         ).json().get("current_weather", {})
         return (
@@ -112,9 +107,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """
-    Look up an invoice in the database and return a JSON-serialisable dict.
-    """
+    """Look up an invoice in the database and return a JSON-serialisable dict."""
     print(f"[DEBUG] get_invoice_by_id({invoice_id=})")
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
@@ -165,9 +158,7 @@ TOOLS = [
 # 3.  SHARED HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
-    """
-    Ensure there is an OpenAI thread ID stored in the Flask session.
-    """
+    """Ensure there is an OpenAI thread ID stored in the Flask session."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
         print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
@@ -177,9 +168,7 @@ def ensure_thread() -> str:
 
 
 def _run_tool(c: Any) -> str:
-    """
-    Execute one tool call and return its output string.
-    """
+    """Execute one tool call and return its output string."""
     args = json.loads(c.function.arguments)
     fn = c.function.name
     if fn == "get_current_weather":
@@ -187,7 +176,6 @@ def _run_tool(c: Any) -> str:
     if fn == "get_invoice_by_id":
         return json.dumps(get_invoice_by_id(**args))
     return f"Unknown tool {fn}"
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4.  WEB ROUTES  (index / delete / edit / export)
@@ -204,8 +192,7 @@ def index():
         for _, row in df.iterrows():
             cl = Client.query.filter_by(name=row["client_name"]).first()
             if not cl:
-                cl = Client(name=row["client_name"],
-                            email=row.get("client_email") or "")
+                cl = Client(name=row["client_name"], email=row.get("client_email") or "")
                 db.session.add(cl)
                 db.session.flush()
             db.session.add(
@@ -255,9 +242,7 @@ def edit_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
-    rows = (
-        [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
-    )
+    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
     csv_data = pd.DataFrame(
         [
             {
@@ -273,31 +258,23 @@ def export_invoice(invoice_id: int | None = None):
     ).to_csv(index=False)
 
     fname = f"invoice_{invoice_id or 'all'}.csv"
-    return (
-        csv_data,
-        200,
-        {
-            "Content-Type": "text/csv",
-            "Content-Disposition": f'attachment; filename="{fname}"',
-        },
-    )
+    return csv_data, 200, {
+        "Content-Type": "text/csv",
+        "Content-Disposition": f'attachment; filename="{fname}"',
+    }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5.  BLOCKING CHAT   (/chat)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat", methods=["POST"])
 def chat_sync():
-    """
-    Blocking (synchronous) chat endpoint.
-    """
+    """Blocking (synchronous) chat endpoint."""
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(
-        thread_id=tid, role="user", content=user_msg
-    )
+    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
     run = client.beta.threads.runs.create(
         thread_id=tid,
@@ -306,13 +283,11 @@ def chat_sync():
         **({"model": MODEL} if MODEL else {}),
     )
 
-    # Poll the run status until completion or error.
     while True:
         status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
         if status.status == "requires_action":
             calls = status.required_action.submit_tool_outputs.tool_calls
-            outputs = [{"tool_call_id": c.id, "output": _run_tool(c)}
-                       for c in calls]
+            outputs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
             client.beta.threads.runs.submit_tool_outputs(
                 thread_id=tid, run_id=run.id, tool_outputs=outputs
             )
@@ -322,7 +297,6 @@ def chat_sync():
             return jsonify({"error": f"Run {status.status}"}), 500
         time.sleep(0.35)
 
-    # Grab last assistant message
     msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
     for msg in msgs.data:
         if msg.role == "assistant":
@@ -334,40 +308,32 @@ def chat_sync():
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
     """
-    Try every known spot where tool_calls may appear.
-    Return (tool_calls, run_id) or None if not present.
+    Return (tool_calls, run_id) if present in any known structure; else None.
     """
-    # A) thread.run.step.delta
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
         if tc:
             return tc, ev.data.run_id
-        # v1.18 style: delta.step_details.tool_calls
         sd = getattr(delta, "step_details", None)
         if sd and getattr(sd, "tool_calls", None):
             return sd.tool_calls, ev.data.run_id
 
-    # B) thread.run.step.created / in_progress (step.tool_calls)
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
         return step.tool_calls, ev.data.run_id
 
-    # C) thread.run.requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         return ra.submit_tool_outputs.tool_calls, ev.data.id
     return None
 
 
-def _follow_stream_after_tools(
-        run_id: str,
-        calls: Sequence[Any],
-        q: queue.Queue,
-        tid: str) -> None:
-    """
-    Execute functions, then stream the continuation of the run into the same queue.
-    """
+def _follow_stream_after_tools(run_id: str,
+                               calls: Sequence[Any],
+                               q: queue.Queue,
+                               tid: str) -> None:
+    """Execute tool calls and stream the continuation of the run."""
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
@@ -375,34 +341,33 @@ def _follow_stream_after_tools(
         tool_outputs=outs,
         stream=True,
     )
-    pipe_events(follow, q, tid)        # recurse
+    pipe_events(follow, q, tid)  # recurse
 
 
 def pipe_events(events, q: queue.Queue, tid: str) -> None:
-    """
-    Iterate (recursively) over event stream, pushing text chunks into `q`.
-    """
+    """Iterate (recursively) over events, pushing text chunks into `q`."""
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # 1) text delta
+        # Text delta
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # 2) Any event that *might* contain tool calls
+        # Potential tool calls
         elif (tc_block := _extract_tool_calls(ev)) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
 
-        # 3) Run finished
+        # End of run
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
+    """Yield Server-Sent Events; send heartbeat every 20 s."""
     heartbeat_at = time.time() + 20
     while True:
         try:
@@ -420,14 +385,13 @@ def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
+    """Streaming chat endpoint (SSE)."""
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(thread_id=tid,
-                                        role="user",
-                                        content=user_msg)
+    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
     q: queue.Queue[str | None] = queue.Queue()
 
