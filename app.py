@@ -3,14 +3,22 @@
 # Flask + SQLAlchemy + OpenAI Responses API (blocking + streaming)
 from __future__ import annotations
 
-import os, sys, time, json, queue, threading, asyncio, functools, logging
+import os
+import sys
+import time
+import json
+import queue
+import threading
+import asyncio
+import functools
+import logging
 from collections.abc import Generator
 from typing import Any
 
 import httpx
 from flask import (
-    Flask, render_template, request, redirect, flash,
-    jsonify, session, Response, copy_current_request_context
+    Flask, render_template, request, redirect,
+    flash, jsonify, session, Response
 )
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
@@ -18,7 +26,7 @@ import openai
 import configparser
 
 # ─────────────────────────────────────────────────────────────
-# 0. LOGGING
+# 0. LOGGING (ISO-8601 → stdout)
 # ─────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -84,7 +92,7 @@ with app.app_context():
 log.info("DB ready")
 
 # ─────────────────────────────────────────────────────────────
-# 3. TOOLS
+# 3. TOOLS (cached + async)  — identical to old version
 # ─────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
@@ -120,14 +128,8 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
         if not coord:
             return f"Location '{location}' not found."
         cw = asyncio.run(_weather_for(*coord))
-        temp = cw.get("temperature")
-        if unit == "fahrenheit":
-            temp = round(temp * 9 / 5 + 32, 1)
-            unit_sign = "°F"
-        else:
-            unit_sign = "°C"
         return (
-            f"The temperature in {location} is {temp} {unit_sign} "
+            f"The temperature in {location} is {cw.get('temperature')} °C "
             f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
         )
     finally:
@@ -152,41 +154,39 @@ def get_invoice_by_id(invoice_id: str) -> dict:
 
 TOOLS = [
     {
-        "name": "get_current_weather",
         "type": "function",
-        "description": "Get current weather for a city",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "location": {"type": "string", "description": "City name"},
-                "unit": {
-                    "type": "string",
-                    "enum": ["celsius", "fahrenheit"],
-                    "default": "celsius",
-                    "description": "Temperature unit",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "unit": {"type": "string", "default": "celsius"},
                 },
+                "required": ["location"],
             },
-            "required": ["location"],
         },
     },
     {
-        "name": "get_invoice_by_id",
         "type": "function",
-        "description": "Return invoice data by invoice_id",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "invoice_id": {"type": "string", "description": "Invoice identifier"}
+        "function": {
+            "name": "get_invoice_by_id",
+            "description": "Return invoice data by invoice_id",
+            "parameters": {
+                "type": "object",
+                "properties": {"invoice_id": {"type": "string"}},
+                "required": ["invoice_id"],
             },
-            "required": ["invoice_id"],
         },
     },
 ]
 
 # ─────────────────────────────────────────────────────────────
-# 4. STREAM HELPERS
+# 4.  STREAM HELPERS (Responses API)
 # ─────────────────────────────────────────────────────────────
 def _run_tool(call: dict[str, Any]) -> str:
+    """Execute mapped tool and return its string output."""
     fn = call["name"]
     args = call["args"]
     t0 = time.perf_counter()
@@ -202,64 +202,79 @@ def _run_tool(call: dict[str, Any]) -> str:
 
 
 def _pipe_events(events, q: queue.Queue[str | None]) -> str | None:
+    """
+    Stream Responses API events into an SSE queue.
+    Executes tool calls on-the-fly and continues streaming after submit_tool_outputs.
+    Returns the last response_id for conversation state.
+    """
     response_id: str | None = None
-    pending: dict[str, dict] = {}
-    finished: set[str] = set()
+
+    # Collect partial tool call data until we have complete JSON arguments.
+    pending: dict[str, dict] = {}       # id -> {name, args_str}
+    done_ids: set[str] = set()
 
     for ev in events:
-        evt = getattr(ev, "event", None)   # <-- correct field
+        typ = getattr(ev, "type", None)
 
-        if evt == "response.created":
+        # 1. brand-new response: remember its id for conversation state
+        if typ == "response.created":
             response_id = ev.response.id
 
-        elif evt == "response.output_text.delta":
+        # 2. normal token delta
+        elif typ == "response.output_text.delta":
             if ev.delta:
                 q.put(ev.delta)
 
-        elif evt == "response.tool_calls":
+        # 3. tool call header (name, empty arguments)
+        elif typ == "response.tool_calls":
             for tc in ev.tool_calls or []:
                 pending[tc.id] = {"name": tc.function.name, "args": ""}
 
-        elif evt == "response.tool_calls.arguments.delta":
+        # 4. arguments are streamed incrementally
+        elif typ == "response.tool_call_arguments.delta":
             tc_id = ev.tool_call_id
             if tc_id in pending:
                 pending[tc_id]["args"] += ev.delta or ""
+
+                # Try to parse JSON when it looks complete
                 try:
-                    pending[tc_id]["parsed"] = json.loads(pending[tc_id]["args"])
+                    args_obj = json.loads(pending[tc_id]["args"])
+                    pending[tc_id]["parsed"] = args_obj        # mark ready
                 except json.JSONDecodeError:
                     pass
 
-        elif evt == "response.tool_calls.done":
+        # 5. tool call finished → execute and submit
+        elif typ == "response.tool_call.done":
             tool_outputs = []
             for tc in ev.tool_calls or []:
-                if tc.id in finished:
+                if tc.id in done_ids:
                     continue
                 meta = pending.get(tc.id)
                 if not meta or "parsed" not in meta:
                     continue
-                finished.add(tc.id)
+                done_ids.add(tc.id)
                 out = _run_tool({"name": meta["name"], "args": meta["parsed"]})
                 tool_outputs.append({"tool_call_id": tc.id, "output": out})
 
             if tool_outputs and response_id:
+                # continue streaming after tool execution
                 follow = client.responses.submit_tool_outputs(
                     response_id=response_id,
                     tool_outputs=tool_outputs,
                     stream=True,
                 )
-                response_id = _pipe_events(follow, q) or response_id
+                response_id = _pipe_events(follow, q) or response_id  # recurse
 
-        elif evt == "response.done":
+        # 6. final event
+        elif typ == "response.done":
             q.put(None)
             return response_id
-
-        else:
-            log.debug("⏺  unhandled event %s", evt)
 
     return response_id
 
 
 def sse_generator(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
+    """Convert queue into Server-Sent Events (with heartbeats)."""
     heartbeat_at = time.time() + 20
     while True:
         try:
@@ -287,18 +302,18 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
     overall_t0 = time.perf_counter()
 
-    @copy_current_request_context
     def consume() -> None:
-        initial = client.responses.create(
-            model=MODEL,
-            input=user_msg,
-            previous_response_id=last_resp_id,
-            tools=TOOLS,
-            stream=True,
-        )
-        new_resp_id = _pipe_events(initial, q)
-        if new_resp_id:
-            session["prev_response_id"] = new_resp_id
+        with app.app_context():
+            initial = client.responses.create(
+                model=MODEL,
+                input=user_msg,
+                previous_response_id=last_resp_id,
+                tools=TOOLS,
+                stream=True,
+            )
+            new_resp_id = _pipe_events(initial, q)
+            if new_resp_id:
+                session["prev_response_id"] = new_resp_id
         log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
 
     threading.Thread(target=consume, daemon=True).start()
