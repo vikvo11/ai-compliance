@@ -7,6 +7,7 @@ from collections.abc import Generator
 from typing import Any
 
 import httpx, pandas as pd, openai, configparser
+from openai import NotFoundError
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context
@@ -92,7 +93,7 @@ def _run_tool(name: str, args: str) -> str:
     fn = DISPATCH.get(name); res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
-# ─── helper: выполнить функцию и продолжить поток ────────────
+# ─── helper: выполнить tool и продолжить поток ───────────────
 def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
                  q: queue.Queue[str | None]) -> str:
     log.info("RUN tool=%s id=%s args=%s", name, tc_id, args_json)
@@ -100,14 +101,15 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
 
     out = _run_tool(name, args_json)
 
-    # ── предпочитаем «родной» метод, если он есть ─────────────
-    if hasattr(client.responses, "actions"):                 # SDK ≥ 1.50
+    # 1️⃣  если есть «родной» метод — пользуемся им
+    if hasattr(client.responses, "actions") and \
+       hasattr(client.responses.actions, "submit_tool_outputs"):
         submit = client.responses.actions.submit_tool_outputs
 
-    elif hasattr(client.responses, "submit_tool_outputs"):   # SDK 1.3-1.4
+    elif hasattr(client.responses, "submit_tool_outputs"):          # SDK 1.3–1.4
         submit = client.responses.submit_tool_outputs
 
-    else:                                                    # very old SDK
+    else:                                                            # fallback
         try:
             from openai.resources.responses import ResponseObject as Cast
         except ImportError:
@@ -116,23 +118,36 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
             except ImportError:
                 Cast = dict
 
-        def submit(response_id, tool_outputs, stream):
-            # !!!  НЕТ ведущего «/v1»,  НО ЕСТЬ «actions/…»
-            path = f"responses/{response_id}/actions/submit_tool_outputs"
-            return client.post(
-                path,
-                body={"tool_outputs": tool_outputs},
-                stream=stream,
-                cast_to=Cast,
-            )
-    # ──────────────────────────────────────────────────────────
+        # список возможных путей (без ведущего /v1)
+        _CANDIDATES = [
+            "responses/{id}/actions/submit_tool_outputs",
+            "responses/{id}/submit_tool_outputs",
+            "responses/{id}/tool_outputs",
+        ]
 
+        def submit(response_id, tool_outputs, stream):
+            last_err = None
+            for tmpl in _CANDIDATES:
+                path = tmpl.format(id=response_id)
+                try:
+                    print(f"DBG |   try POST {path}")
+                    return client.post(
+                        path,
+                        body={"tool_outputs": tool_outputs},
+                        stream=stream,
+                        cast_to=Cast,
+                    )
+                except NotFoundError as e:
+                    last_err = e          # пробуем следующий путь
+            raise last_err                # все варианты 404
+
+    # вызов выбранной функции submit
     follow = submit(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    return _pipe(follow, q)            # рекурсивно продолжаем поток
+    return _pipe(follow, q)
 
 
 # ─── основной парсер потока ──────────────────────────────────
