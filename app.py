@@ -1,23 +1,15 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, SDK >= 1.17)
+# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, SDK ≥ 1.19)
+
 from __future__ import annotations
 
-import json
-import os
-import queue
-import sys
-import threading
-import time
+import json, os, sys, time, queue, threading
 from collections.abc import Generator, Sequence
 from typing import Any, Optional
 
-import configparser
-import requests
-import openai
-import pandas as pd
-from flask import (Flask, Response, flash, jsonify, redirect, render_template,
-                   request, session)
+import configparser, requests, openai, pandas as pd
+from flask import Flask, Response, flash, jsonify, redirect, render_template, request, session
 from flask_sqlalchemy import SQLAlchemy
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -26,12 +18,9 @@ from flask_sqlalchemy import SQLAlchemy
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
-                         fallback=os.getenv("OPENAI_API_KEY"))
-MODEL: Optional[str] = cfg.get("DEFAULT", "model",
-                               fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
-ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id",
-                            fallback=os.getenv("ASSISTANT_ID", "")).strip()
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
+MODEL: Optional[str] = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
+ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
 if not OPENAI_API_KEY:
     sys.exit("❌  OPENAI_API_KEY is not configured.")
@@ -57,12 +46,7 @@ class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128))
-    invoices = db.relationship(
-        "Invoice",
-        backref="client",
-        lazy=True,
-        cascade="all, delete-orphan",
-    )
+    invoices = db.relationship("Invoice", backref="client", lazy=True, cascade="all, delete-orphan")
 
 
 class Invoice(db.Model):
@@ -82,9 +66,7 @@ with app.app_context():
 # 2.  ASSISTANT TOOLS
 # ──────────────────────────────────────────────────────────────────────────────
 def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """Return a short string with the current weather for the location."""
     try:
-        print(f"[DEBUG] get_current_weather({location=}, {unit=})")
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1},
@@ -97,18 +79,16 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": lat, "longitude": lon, "current_weather": True},
             timeout=5,
-        ).json().get("current_weather", {})
+        ).json()["current_weather"]
         return (
-            f"The temperature in {location} is {cw.get('temperature')} °C "
-            f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
+            f"Temp in {location}: {cw['temperature']} °C, "
+            f"wind {cw['windspeed']} m/s ({cw['time']})."
         )
     except Exception as exc:  # noqa: BLE001
-        return f"Error fetching weather: {exc}"
+        return f"Weather error: {exc}"
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """Look up an invoice in the database and return a JSON-serialisable dict."""
-    print(f"[DEBUG] get_invoice_by_id({invoice_id=})")
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
@@ -145,9 +125,7 @@ TOOLS = [
             "description": "Return invoice data by invoice_id",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "invoice_id": {"type": "string"},
-                },
+                "properties": { "invoice_id": {"type": "string"} },
                 "required": ["invoice_id"],
             },
         },
@@ -155,37 +133,31 @@ TOOLS = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  SHARED HELPERS
+# 3.  HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
-    """Ensure there is an OpenAI thread ID stored in the Flask session."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
-        print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
-    else:
-        print(f"[DEBUG] Using existing thread ID: {session['thread_id']}")
     return session["thread_id"]
 
 
 def _run_tool(c: Any) -> str:
-    """Execute one tool call and return its output string."""
     args = json.loads(c.function.arguments)
-    fn = c.function.name
-    if fn == "get_current_weather":
+    if c.function.name == "get_current_weather":
         return get_current_weather(**args)
-    if fn == "get_invoice_by_id":
+    if c.function.name == "get_invoice_by_id":
         return json.dumps(get_invoice_by_id(**args))
-    return f"Unknown tool {fn}"
+    return f"Unknown tool {c.function.name}"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4.  WEB ROUTES  (index / delete / edit / export)
+# 4.  ROUTES (index / CRUD / export)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         f = request.files.get("csv_file")
         if not f or not f.filename.endswith(".csv"):
-            flash("Please upload a valid CSV file.")
+            flash("Upload a valid CSV.")
             return redirect(request.url)
 
         df = pd.read_csv(f)
@@ -205,45 +177,40 @@ def index():
                 )
             )
         db.session.commit()
-        flash("Invoices uploaded successfully.")
+        flash("Invoices uploaded.")
         return redirect("/")
 
     return render_template("index.html", invoices=Invoice.query.all())
 
 
-@app.route("/delete/<int:invoice_id>", methods=["POST"])
-def delete_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(inv)
+@app.route("/delete/<int:iid>", methods=["POST"])
+def delete_invoice(iid: int):
+    db.session.delete(Invoice.query.get_or_404(iid))
     db.session.commit()
     flash("Invoice deleted.")
     return redirect("/")
 
 
-@app.route("/edit/<int:invoice_id>", methods=["POST"])
-def edit_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
+@app.route("/edit/<int:iid>", methods=["POST"])
+def edit_invoice(iid: int):
+    inv = Invoice.query.get_or_404(iid)
     inv.amount = request.form["amount"]
     inv.date_due = request.form["date_due"]
     inv.status = request.form["status"]
     inv.client.email = request.form["client_email"]
     db.session.commit()
     return jsonify(
-        {
-            "client_name": inv.client.name,
-            "invoice_id": inv.invoice_id,
-            "amount": inv.amount,
-            "date_due": inv.date_due,
-            "status": inv.status,
-        }
+        {k: v for k, v in _run_tool(
+            type("T", (), {"function": type("F", (), {"name": "get_invoice_by_id"}), "function.arguments": json.dumps({"invoice_id": inv.invoice_id})})
+        ).items() if k != "error"}
     )
 
 
 @app.route("/export")
-@app.route("/export/<int:invoice_id>")
-def export_invoice(invoice_id: int | None = None):
-    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
-    csv_data = pd.DataFrame(
+@app.route("/export/<int:iid>")
+def export_invoice(iid: int | None = None):
+    rows = [Invoice.query.get_or_404(iid)] if iid else Invoice.query.all()
+    df = pd.DataFrame(
         [
             {
                 "client_name": r.client.name,
@@ -255,12 +222,10 @@ def export_invoice(invoice_id: int | None = None):
             }
             for r in rows
         ]
-    ).to_csv(index=False)
-
-    fname = f"invoice_{invoice_id or 'all'}.csv"
-    return csv_data, 200, {
+    )
+    return df.to_csv(index=False), 200, {
         "Content-Type": "text/csv",
-        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Content-Disposition": f'attachment; filename="invoice_{iid or "all"}.csv"',
     }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -268,158 +233,131 @@ def export_invoice(invoice_id: int | None = None):
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat", methods=["POST"])
 def chat_sync():
-    """Blocking (synchronous) chat endpoint."""
-    user_msg = (request.json or {}).get("message", "").strip()
-    if not user_msg:
-        return jsonify({"error": "Empty message"}), 400
+    msg = (request.json or {}).get("message", "").strip()
+    if not msg:
+        return jsonify({"error": "Empty"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
+    client.beta.threads.messages.create(thread_id=tid, role="user", content=msg)
 
     run = client.beta.threads.runs.create(
-        thread_id=tid,
-        assistant_id=ASSISTANT_ID,
-        tools=TOOLS,
-        **({"model": MODEL} if MODEL else {}),
+        thread_id=tid, assistant_id=ASSISTANT_ID, tools=TOOLS, **({"model": MODEL} if MODEL else {})
     )
 
     while True:
-        status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
-        if status.status == "requires_action":
-            calls = status.required_action.submit_tool_outputs.tool_calls
-            outputs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
-            client.beta.threads.runs.submit_tool_outputs(
-                thread_id=tid, run_id=run.id, tool_outputs=outputs
-            )
-        elif status.status == "completed":
+        st = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
+        if st.status == "requires_action":
+            calls = st.required_action.submit_tool_outputs.tool_calls
+            outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
+            client.beta.threads.runs.submit_tool_outputs(thread_id=tid, run_id=run.id, tool_outputs=outs)
+        elif st.status == "completed":
             break
-        elif status.status in {"failed", "cancelled", "expired"}:
-            return jsonify({"error": f"Run {status.status}"}), 500
-        time.sleep(0.35)
+        elif st.status in {"failed", "cancelled", "expired"}:
+            return jsonify({"error": f"Run {st.status}"}), 500
+        time.sleep(0.3)
 
-    msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
-    for msg in msgs.data:
-        if msg.role == "assistant":
-            return jsonify({"response": msg.content[0].text.value})
-    return jsonify({"error": "No assistant response"}), 500
+    last = next(
+        m for m in client.beta.threads.messages.list(thread_id=tid, order="desc").data if m.role == "assistant"
+    )
+    return jsonify({"response": last.content[0].text.value})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream) – robust tool-call handling
+# 6.  STREAMING CHAT  (/chat/stream) – for SDK 1.19
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
     """
-    Return (tool_calls, run_id) if present in any known structure; else None.
+    Return (tool_calls, run_id) for any SDK-1.19 event shape, else None.
     """
+    # A) step.delta
     delta = getattr(ev.data, "delta", None)
-    if delta:
-        tc = getattr(delta, "tool_calls", None)
-        if tc:
-            return tc, ev.data.run_id
-        sd = getattr(delta, "step_details", None)
-        if sd and getattr(sd, "tool_calls", None):
-            return sd.tool_calls, ev.data.run_id
+    if delta and (tc := getattr(delta, "tool_calls", None)):
+        return tc, ev.data.run_id
 
+    # B) step.created / in_progress
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
-        return step.tool_calls, ev.data.run_id
+        return step.tool_calls, step.run_id
 
+    # C) requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         return ra.submit_tool_outputs.tool_calls, ev.data.id
     return None
 
 
-def _follow_stream_after_tools(run_id: str,
-                               calls: Sequence[Any],
-                               q: queue.Queue,
-                               tid: str) -> None:
-    """Execute tool calls and stream the continuation of the run."""
+def _continue_after_tools(tid: str,
+                          run_id: str,
+                          calls: Sequence[Any],
+                          q: queue.Queue) -> None:
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
-    follow = client.beta.threads.runs.submit_tool_outputs(
-        thread_id=tid,
-        run_id=run_id,
-        tool_outputs=outs,
-        stream=True,
+    cont = client.beta.threads.runs.submit_tool_outputs(
+        thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
     )
-    pipe_events(follow, q, tid)  # recurse
+    _pipe_events(cont, q, tid)  # recursion
 
 
-def pipe_events(events, q: queue.Queue, tid: str) -> None:
-    """Iterate (recursively) over events, pushing text chunks into `q`."""
+def _pipe_events(events, q: queue.Queue, tid: str) -> None:
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # Text delta
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # Potential tool calls
-        elif (tc_block := _extract_tool_calls(ev)) is not None:
-            tool_calls, run_id = tc_block
-            _follow_stream_after_tools(run_id, tool_calls, q, tid)
+        elif (tc := _extract_tool_calls(ev)) is not None:
+            calls, rid = tc
+            _continue_after_tools(tid, rid, calls, q)
 
-        # End of run
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
 
-def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
-    """Yield Server-Sent Events; send heartbeat every 20 s."""
-    heartbeat_at = time.time() + 20
+def _sse(q: queue.Queue) -> Generator[bytes, None, None]:
+    heartbeat = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
             if tok is None:
-                yield b"event: done\ndata: [DONE]\n\n"
-                break
-            yield f"data: {tok}\n\n".encode()
-            heartbeat_at = time.time() + 20
+                yield b"event: done\ndata: [DONE]\n\n"; break
+            yield f"data: {tok}\n\n".encode(); heartbeat = time.time() + 20
         except queue.Empty:
-            if time.time() > heartbeat_at:
-                yield b": keep-alive\n\n"
-                heartbeat_at = time.time() + 20
+            if time.time() > heartbeat:
+                yield b": keep-alive\n\n"; heartbeat = time.time() + 20
 
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """Streaming chat endpoint (SSE)."""
-    user_msg = (request.json or {}).get("message", "").strip()
-    if not user_msg:
-        return jsonify({"error": "Empty message"}), 400
+    msg = (request.json or {}).get("message", "").strip()
+    if not msg:
+        return jsonify({"error": "Empty"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
+    client.beta.threads.messages.create(thread_id=tid, role="user", content=msg)
 
     q: queue.Queue[str | None] = queue.Queue()
 
-    def consume():
-        print("[DEBUG] consume() started", flush=True)
+    def _consume():
         first = client.beta.threads.runs.create(
-            thread_id=tid,
-            assistant_id=ASSISTANT_ID,
-            tools=TOOLS,
-            stream=True,
-            **({"model": MODEL} if MODEL else {}),
+            thread_id=tid, assistant_id=ASSISTANT_ID, tools=TOOLS,
+            stream=True, **({"model": MODEL} if MODEL else {})
         )
-        pipe_events(first, q, tid)
-        print("[DEBUG] consume() finished", flush=True)
+        _pipe_events(first, q, tid)
 
-    threading.Thread(target=consume, daemon=True).start()
+    threading.Thread(target=_consume, daemon=True).start()
 
     return Response(
-        sse_generator(q),
+        _sse(q),
         mimetype="text/event-stream",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 7.  ENTRY POINT
+# 7.  ENTRY
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    print("[DEBUG] Starting Flask app on 0.0.0.0:5005")
+    print("[DEBUG] Flask on 0.0.0.0:5005")
     app.run(host="0.0.0.0", port=5005, debug=True)
