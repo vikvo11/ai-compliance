@@ -98,31 +98,45 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
     log.info("RUN tool=%s id=%s args=%s", name, tc_id, args_json)
     out = _run_tool(name, args_json)
 
-    # --- выбираем, какой submit использовать ---
-    if hasattr(client.responses, "actions"):                      # SDK ≥ 1.50
+    # 1) Новый SDK (≥1.50) — метод в .actions
+    if hasattr(client.responses, "actions"):
         submit = client.responses.actions.submit_tool_outputs
 
-    elif hasattr(client.responses, "submit_tool_outputs"):        # SDK 1.3-1.4
+    # 2) Ветвь 1.3 – 1.4
+    elif hasattr(client.responses, "submit_tool_outputs"):
         submit = client.responses.submit_tool_outputs
 
-    else:                                                         # fallback
-        from openai.resources.responses import Response as OAResp
+    # 3) Совсем старый интерфейс → низкоуровневый POST
+    else:
+        # --- ищем подходящий класс, чтобы отдать в cast_to ----------
+        try:
+            # 1.78.0+
+            from openai.resources.responses import ResponseObject as _Resp
+            Cast = _Resp
+        except ImportError:
+            try:
+                # 1.3 – 1.7
+                from openai.resources.responses import Response as _Resp
+                Cast = _Resp
+            except ImportError:
+                # если вообще ничего не нашлось
+                Cast = dict
+        # ------------------------------------------------------------
 
         def submit(response_id, tool_outputs, stream):
             return client.post(
                 f"/v1/responses/{response_id}/actions/submit_tool_outputs",
-                cast_to=OAResp,                   # ← ОБЯЗАТЕЛЬНО
                 body={"tool_outputs": tool_outputs},
                 stream=stream,
+                cast_to=Cast,          # ← теперь всегда есть корректный тип
             )
-    # -------------------------------------------
 
     follow = submit(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    return _pipe(follow, q)        # рекурсивно продолжаем стрим
+    return _pipe(follow, q)            # рекурсивно продолжаем стрим
 
 
 # ─── основной парсер потока ──────────────────────────────────
