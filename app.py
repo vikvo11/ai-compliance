@@ -21,6 +21,7 @@ from flask import (
     flash, jsonify, session, Response
 )
 from flask_sqlalchemy import SQLAlchemy
+from flask import copy_current_request_context
 import pandas as pd
 import openai
 import configparser
@@ -304,7 +305,8 @@ def chat_stream():
     last_resp_id = session.get("prev_response_id")
     q: queue.Queue[str | None] = queue.Queue()
     overall_t0 = time.perf_counter()
-
+    
+    @copy_current_request_context
     def consume() -> None:
         with app.app_context():
             initial = client.responses.create(
