@@ -4,30 +4,22 @@
 # All comments remain in English – per user request
 from __future__ import annotations
 
-import os
-import sys
-import json
-import time
-import queue
-import asyncio
-import logging
-import functools
-import threading
+import os, sys, json, time, queue, asyncio, logging, functools, threading
 from collections.abc import Generator
 from typing import Any, Optional
 
 import httpx                      # fast HTTP client, async-friendly
 import pandas as pd
-import openai                     # ≥ 1.26.0 (required for Responses API)
+import openai                     # ≥ 1.26.0 (Responses API support)
 from flask import (
-    Flask, Response, flash, jsonify, redirect,
-    render_template, request, session, copy_current_request_context
+    Flask, Response, flash, jsonify, redirect, render_template,
+    request, session, copy_current_request_context
 )
 from flask_sqlalchemy import SQLAlchemy
 import configparser
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 0.  LOGGING (ISO-8601 → stdout)
+# 0. LOGGING
 # ──────────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -39,7 +31,7 @@ logging.basicConfig(
 log = logging.getLogger("app")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1.  ENV & OpenAI client (Responses API)
+# 1. ENV & OpenAI client (Responses API)
 # ──────────────────────────────────────────────────────────────────────────────
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
@@ -57,7 +49,7 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, API=Responses)", MODEL)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  FLASK & DB
+# 2. FLASK & DB
 # ──────────────────────────────────────────────────────────────────────────────
 os.makedirs("/app/data", exist_ok=True)
 
@@ -93,7 +85,7 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  TOOL DEFINITIONS
+# 3. TOOL DEFINITIONS (flat schema – NO 'type')
 # ──────────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
@@ -149,53 +141,46 @@ def get_invoice_by_id(invoice_id: str) -> dict:
 
 TOOLS = [
     {
-        "type": "function",
-        "function": {
-            "name": "get_current_weather",
-            "description": "Get current weather for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"},
-                    "unit": {"type": "string", "default": "celsius"},
-                },
-                "required": ["location"],
+        "name": "get_current_weather",
+        "description": "Get current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"},
+                "unit": {"type": "string", "default": "celsius"},
             },
+            "required": ["location"],
         },
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_invoice_by_id",
-            "description": "Return invoice data by invoice_id",
-            "parameters": {
-                "type": "object",
-                "properties": {"invoice_id": {"type": "string"}},
-                "required": ["invoice_id"],
-            },
+        "name": "get_invoice_by_id",
+        "description": "Return invoice data by invoice_id",
+        "parameters": {
+            "type": "object",
+            "properties": {"invoice_id": {"type": "string"}},
+            "required": ["invoice_id"],
         },
     },
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4.  RESPONSES-API HELPERS
+# 4. RESPONSES-API HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def _call_local_tool(call: Any) -> str:
     """Execute requested function and return stringified result."""
-    fn_name: str = call.name
     try:
         args = json.loads(call.arguments or "{}")
     except json.JSONDecodeError as exc:
         return f"⛔ invalid JSON: {exc}"
 
     try:
-        if fn_name == "get_current_weather":
+        if call.name == "get_current_weather":
             return get_current_weather(**args)
-        if fn_name == "get_invoice_by_id":
+        if call.name == "get_invoice_by_id":
             return json.dumps(get_invoice_by_id(**args))
-        return f"⛔ unknown function '{fn_name}'"
+        return f"⛔ unknown function '{call.name}'"
     except Exception as exc:
-        log.exception("tool %s raised", fn_name)
+        log.exception("tool %s raised", call.name)
         return f"⛔ tool failure: {exc}"
 
 
@@ -231,7 +216,7 @@ def _chat_round(user_msg: str,
         model=MODEL,
         input=[{"role": "user", "content": user_msg}],
         previous_response_id=prev_resp_id,
-        tools=TOOLS,
+        tools=TOOLS,        # 👉 flat schema works for Responses API
         stream=False,
     )
 
@@ -249,15 +234,11 @@ def _chat_round(user_msg: str,
 
 
 def _chat_until_no_tools(user_msg: str) -> openai.types.Stream:
-    """
-    Resolve all requested tool calls (loop, non-streaming),
-    then open one streaming call for the final answer.
-    """
+    """Resolve tool loop, then open streaming call for final answer."""
     prev_id = session.get("prev_response_id")
     response, tool_outputs = _chat_round(user_msg, prev_id)
 
     while tool_outputs:
-        log.info("LLM requested %d tool call(s)", len(tool_outputs))
         response = client.responses.create(
             model=MODEL,
             input=tool_outputs,
@@ -285,7 +266,7 @@ def _chat_until_no_tools(user_msg: str) -> openai.types.Stream:
     return stream
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  CHAT ENDPOINT (Responses API + SSE)
+# 5. CHAT ENDPOINT (Responses API + SSE)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
@@ -295,7 +276,7 @@ def chat_stream():
 
     q: queue.Queue[str | None] = queue.Queue()
 
-    @copy_current_request_context          # preserves request/session inside thread
+    @copy_current_request_context          # keep session inside thread
     def worker():
         try:
             stream = _chat_until_no_tools(user_msg)
@@ -313,7 +294,7 @@ def chat_stream():
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  CSV / CRUD (unchanged)
+# 6. CSV / CRUD (unchanged)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -406,7 +387,7 @@ def export_invoice(invoice_id: Optional[int] = None):
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 7.  ENTRY POINT
+# 7. ENTRY POINT
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     with app.app_context():
