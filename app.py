@@ -185,13 +185,13 @@ def _finish_tool(
     args_json: str,
     q: queue.Queue[str | None],
 ) -> str:
-    """Execute a tool, send its output to OpenAI, continue streaming."""
+    """Execute a tool, send its output to OpenAI, and continue streaming."""
     log.info("RUN tool=%s id=%s args=%s", name, tool_call_id, args_json)
     print(f"DBG | RUN tool={name} id={tool_call_id}")
 
     output = _run_tool(name, args_json)
 
-    # ── 1. If we already have thread & run IDs → Assistants endpoint ──────
+    # ── 1. Assistants-style endpoint (thread/run IDs уже есть) ────────────
     if thread_id and run_id:
         follow = client.beta.threads.runs.submit_tool_outputs(
             thread_id=thread_id,
@@ -201,11 +201,28 @@ def _finish_tool(
         )
         return _pipe(follow, q, thread_id, run_id)
 
-    # ── 2. Otherwise stay in Responses API ─────────────────────────────────
-    follow = client.responses.actions.submit_tool_outputs(
-        response_id=response_id,
-        tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
+    # ── 2. Responses-style endpoint (SDK 1.78+) ───────────────────────────
+    if hasattr(client.responses, "submit_tool_outputs"):
+        follow = client.responses.submit_tool_outputs(
+            response_id=response_id,
+            tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
+            stream=True,
+        )
+        return _pipe(follow, q, thread_id, run_id)
+
+    # ── 3.  Fallback for very old SDKs (ручной POST) ──────────────────────
+    try:
+        from openai.resources.responses import ResponseObject as Cast
+    except ImportError:
+        Cast = dict
+
+    legacy_path = f"responses/{response_id}/tool_outputs"
+    print(f"DBG |   fallback POST {legacy_path}")
+    follow = client.post(
+        legacy_path,
+        body={"tool_outputs": [{"tool_call_id": tool_call_id, "output": output}]},
         stream=True,
+        cast_to=Cast,
     )
     return _pipe(follow, q, thread_id, run_id)
 
