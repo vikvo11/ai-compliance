@@ -330,55 +330,76 @@ def chat_sync():
     return jsonify({"error": "No assistant response"}), 500
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream) – диагностика + фиксация tool-calls
+# 6.  STREAMING CHAT  (/chat/stream) – robust tool-call handling
 # ──────────────────────────────────────────────────────────────────────────────
-def pipe_events(events, q: queue.Queue, tid: str) -> None:
+def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
     """
-    Recursively iterates over a stream of events and puts text into `q`.
-    Handles tool calls from both 'step.delta' and 'requires_action'.
+    Try every known spot where tool_calls may appear.
+    Return (tool_calls, run_id) or None if not present.
     """
-    for ev in events:
-        # Печатаем ВСЁ, что отдаёт OpenAI:
-        print("[EVENT]", ev.event, flush=True)
+    # A) thread.run.step.delta
+    delta = getattr(ev.data, "delta", None)
+    if delta:
+        tc = getattr(delta, "tool_calls", None)
+        if tc:
+            return tc, ev.data.run_id
+        # v1.18 style: delta.step_details.tool_calls
+        sd = getattr(delta, "step_details", None)
+        if sd and getattr(sd, "tool_calls", None):
+            return sd.tool_calls, ev.data.run_id
 
-        # ---------- текстовые дельты ----------
-        if ev.event == "thread.message.delta":
-            for part in (ev.data.delta.content or []):
-                if part.type == "text":
-                    q.put(part.text.value)
+    # B) thread.run.step.created / in_progress (step.tool_calls)
+    step = getattr(ev.data, "step", None)
+    if step and getattr(step, "tool_calls", None):
+        return step.tool_calls, ev.data.run_id
 
-        # ---------- tool-calls (новый SDK ≥ 1.17) ----------
-        elif ev.event == "thread.run.step.delta":
-            tc = ev.data.delta.tool_calls
-            if tc:
-                _follow_stream_after_tools(ev.data.run_id, tc, q, tid)
-
-        # ---------- tool-calls (fallback) ----------
-        elif ev.event == "thread.run.requires_action":
-            tc = ev.data.required_action.submit_tool_outputs.tool_calls
-            _follow_stream_after_tools(ev.data.id, tc, q, tid)
-
-        # ---------- завершение ----------
-        elif ev.event == "thread.run.completed":
-            q.put(None)
-            return
+    # C) thread.run.requires_action
+    ra = getattr(ev.data, "required_action", None)
+    if ra and getattr(ra, "submit_tool_outputs", None):
+        return ra.submit_tool_outputs.tool_calls, ev.data.id
+    return None
 
 
-def _follow_stream_after_tools(run_id: str,
-                               calls: Sequence[Any],
-                               q: queue.Queue,
-                               tid: str) -> None:
+def _follow_stream_after_tools(
+        run_id: str,
+        calls: Sequence[Any],
+        q: queue.Queue,
+        tid: str) -> None:
     """
-    Отправляет результаты функций и сразу же читает продолжение потока.
+    Execute functions, then stream the continuation of the run into the same queue.
     """
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
         run_id=run_id,
         tool_outputs=outs,
-        stream=True,                 # ← обязательно!
+        stream=True,
     )
-    pipe_events(follow, q, tid)      # рекурсивно читаем «вторую волну»
+    pipe_events(follow, q, tid)        # recurse
+
+
+def pipe_events(events, q: queue.Queue, tid: str) -> None:
+    """
+    Iterate (recursively) over event stream, pushing text chunks into `q`.
+    """
+    for ev in events:
+        print("[EVENT]", ev.event, flush=True)
+
+        # 1) text delta
+        if ev.event == "thread.message.delta":
+            for part in (ev.data.delta.content or []):
+                if part.type == "text":
+                    q.put(part.text.value)
+
+        # 2) Any event that *might* contain tool calls
+        elif (tc_block := _extract_tool_calls(ev)) is not None:
+            tool_calls, run_id = tc_block
+            _follow_stream_after_tools(run_id, tool_calls, q, tid)
+
+        # 3) Run finished
+        elif ev.event == "thread.run.completed":
+            q.put(None)
+            return
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
@@ -387,11 +408,14 @@ def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
         try:
             tok = q.get(timeout=1)
             if tok is None:
-                yield b"event: done\ndata: [DONE]\n\n"; break
-            yield f"data: {tok}\n\n".encode(); heartbeat_at = time.time() + 20
+                yield b"event: done\ndata: [DONE]\n\n"
+                break
+            yield f"data: {tok}\n\n".encode()
+            heartbeat_at = time.time() + 20
         except queue.Empty:
             if time.time() > heartbeat_at:
-                yield b": keep-alive\n\n"; heartbeat_at = time.time() + 20
+                yield b": keep-alive\n\n"
+                heartbeat_at = time.time() + 20
 
 
 @app.route("/chat/stream", methods=["POST"])
