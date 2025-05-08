@@ -330,109 +330,94 @@ def chat_sync():
     return jsonify({"error": "No assistant response"}), 500
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream) – SDK ≥ 1.17
+# 6.  STREAMING CHAT  (/chat/stream) – диагностика + фиксация tool-calls
 # ──────────────────────────────────────────────────────────────────────────────
-class StreamHandler:
+def pipe_events(events, q: queue.Queue, tid: str) -> None:
     """
-    Processes events from OpenAI run stream and pushes text into a queue.
-    Handles tool calls *recursively* so text after tools also reaches client.
+    Recursively iterates over a stream of events and puts text into `q`.
+    Handles tool calls from both 'step.delta' and 'requires_action'.
     """
+    for ev in events:
+        # Печатаем ВСЁ, что отдаёт OpenAI:
+        print("[EVENT]", ev.event, flush=True)
 
-    def __init__(self, q: queue.Queue, thread_id: str):
-        self.q = q
-        self.thread_id = thread_id
-
-    # ---------------------------------------------------------------------- #
-    # Low-level helpers
-    # ---------------------------------------------------------------------- #
-    def _push_text(self, ev):
-        delta = ev.data.delta
-        if delta and delta.content:
-            for part in delta.content:
-                if part.type == "text":
-                    self.q.put(part.text.value)
-
-    def _submit_tools_and_stream(self, run_id: str, calls: Sequence[Any]):
-        outputs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
-
-        follow = client.beta.threads.runs.submit_tool_outputs(
-            thread_id=self.thread_id,
-            run_id=run_id,
-            tool_outputs=outputs,
-            stream=True,
-        )
-        for ev in follow:
-            self.process_event(ev)      # ← recursion: continue same run
-
-    # ---------------------------------------------------------------------- #
-    # Public entry
-    # ---------------------------------------------------------------------- #
-    def process_event(self, ev: Any) -> bool:
+        # ---------- текстовые дельты ----------
         if ev.event == "thread.message.delta":
-            self._push_text(ev)
+            for part in (ev.data.delta.content or []):
+                if part.type == "text":
+                    q.put(part.text.value)
 
+        # ---------- tool-calls (новый SDK ≥ 1.17) ----------
         elif ev.event == "thread.run.step.delta":
-            step = ev.data.delta
-            if step and step.tool_calls:
-                self._submit_tools_and_stream(ev.data.run_id, step.tool_calls)
+            tc = ev.data.delta.tool_calls
+            if tc:
+                _follow_stream_after_tools(ev.data.run_id, tc, q, tid)
 
+        # ---------- tool-calls (fallback) ----------
         elif ev.event == "thread.run.requires_action":
-            calls = ev.data.required_action.submit_tool_outputs.tool_calls
-            self._submit_tools_and_stream(ev.data.id, calls)
+            tc = ev.data.required_action.submit_tool_outputs.tool_calls
+            _follow_stream_after_tools(ev.data.id, tc, q, tid)
 
+        # ---------- завершение ----------
         elif ev.event == "thread.run.completed":
-            self.q.put(None)
-            return False
-        return True
+            q.put(None)
+            return
+
+
+def _follow_stream_after_tools(run_id: str,
+                               calls: Sequence[Any],
+                               q: queue.Queue,
+                               tid: str) -> None:
+    """
+    Отправляет результаты функций и сразу же читает продолжение потока.
+    """
+    outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
+    follow = client.beta.threads.runs.submit_tool_outputs(
+        thread_id=tid,
+        run_id=run_id,
+        tool_outputs=outs,
+        stream=True,                 # ← обязательно!
+    )
+    pipe_events(follow, q, tid)      # рекурсивно читаем «вторую волну»
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
-    """
-    Yield Server-Sent Events; send heartbeat every 20 s while waiting.
-    """
     heartbeat_at = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
             if tok is None:
-                yield b"event: done\ndata: [DONE]\n\n"
-                break
-            yield f"data: {tok}\n\n".encode()
-            heartbeat_at = time.time() + 20
+                yield b"event: done\ndata: [DONE]\n\n"; break
+            yield f"data: {tok}\n\n".encode(); heartbeat_at = time.time() + 20
         except queue.Empty:
             if time.time() > heartbeat_at:
-                yield b": keep-alive\n\n"
-                heartbeat_at = time.time() + 20
+                yield b": keep-alive\n\n"; heartbeat_at = time.time() + 20
 
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """
-    Streaming chat endpoint using runs.create(stream=True).
-    """
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(
-        thread_id=tid, role="user", content=user_msg
-    )
+    client.beta.threads.messages.create(thread_id=tid,
+                                        role="user",
+                                        content=user_msg)
 
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume():
-        handler = StreamHandler(q, tid)
-        stream = client.beta.threads.runs.create(
+        print("[DEBUG] consume() started", flush=True)
+        first = client.beta.threads.runs.create(
             thread_id=tid,
             assistant_id=ASSISTANT_ID,
             tools=TOOLS,
             stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        for ev in iter(stream.__next__, None):
-            if not handler.process_event(ev):
-                break
+        pipe_events(first, q, tid)
+        print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
 
