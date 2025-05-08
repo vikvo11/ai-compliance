@@ -27,13 +27,14 @@ import openai
 import configparser
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 0.  LOGGING  (prints ISO 8601 timestamps to stdout)
+# 0.  LOGGING (ISO-8601 → stdout)
 # ──────────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S%z",
+    force=True,
 )
 log = logging.getLogger("app")
 
@@ -43,15 +44,12 @@ log = logging.getLogger("app")
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY: str | None = cfg.get(
-    "DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY")
-)
-MODEL: Optional[str] = cfg.get(
-    "DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")
-).strip() or None
-ASSISTANT_ID: str = cfg.get(
-    "DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")
-).strip()
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
+                         fallback=os.getenv("OPENAI_API_KEY"))
+MODEL = (cfg.get("DEFAULT", "model",
+                 fallback=os.getenv("OPENAI_MODEL", "")).strip() or None)
+ASSISTANT_ID = cfg.get("DEFAULT", "assistant_id",
+                       fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
 if not OPENAI_API_KEY:
     log.critical("❌  OPENAI_API_KEY is not configured.")
@@ -60,9 +58,8 @@ if not ASSISTANT_ID:
     log.critical("❌  ASSISTANT_ID is not configured.")
     sys.exit(1)
 
-# single, warm HTTP connection pool for the lifetime of the app
-client = openai.OpenAI(api_key=OPENAI_API_KEY, max_retries=3, timeout=30)
-log.info("OpenAI client initialised (model=%s, assistant_id=%s)", MODEL, ASSISTANT_ID)
+client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
+log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2.  FLASK & DB
@@ -82,10 +79,7 @@ class Client(db.Model):
     name = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128))
     invoices = db.relationship(
-        "Invoice",
-        backref="client",
-        lazy=True,
-        cascade="all, delete-orphan",
+        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
     )
 
 
@@ -101,17 +95,16 @@ class Invoice(db.Model):
 
 with app.app_context():
     db.create_all()
-log.info("Database initialised")
+log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS  (fast, cached, async)
+# 3.  ASSISTANT TOOLS (cached + async)
 # ──────────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
 
 @functools.lru_cache(maxsize=2048)
 def _coords_for(city: str) -> tuple[float, float] | None:
-    """Return (lat, lon) from cache or external service."""
     t0 = time.perf_counter()
     resp = httpx.get(
         "https://geocoding-api.open-meteo.com/v1/search",
@@ -119,10 +112,8 @@ def _coords_for(city: str) -> tuple[float, float] | None:
         timeout=HTTP_TIMEOUT,
     )
     res = resp.json().get("results")
-    log.debug("Geocoding %s took %.3f s", city, time.perf_counter() - t0)
-    if not res:
-        return None
-    return res[0]["latitude"], res[0]["longitude"]
+    log.debug("geocode '%s' %.3f s", city, time.perf_counter() - t0)
+    return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
 async def _weather_for(lat: float, lon: float) -> dict:
@@ -132,15 +123,11 @@ async def _weather_for(lat: float, lon: float) -> dict:
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": lat, "longitude": lon, "current_weather": True},
         )
-    log.debug("Weather API call took %.3f s", time.perf_counter() - t0)
+    log.debug("weather API %.3f s", time.perf_counter() - t0)
     return resp.json().get("current_weather", {})
 
 
 def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """
-    Blocking wrapper around async tool: executed synchronously by the
-    OpenAI tool-calling runtime.
-    """
     t0 = time.perf_counter()
     try:
         coord = _coords_for(location)
@@ -152,14 +139,13 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
             f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
         )
     finally:
-        log.info("Tool get_current_weather(%s) finished in %.3f s", location, time.perf_counter() - t0)
+        log.info("tool:get_current_weather('%s') %.3f s", location, time.perf_counter() - t0)
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """Look up an invoice in the database and return a JSON-serialisable dict."""
     t0 = time.perf_counter()
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    log.info("DB lookup for invoice %s took %.3f s", invoice_id, time.perf_counter() - t0)
+    log.info("tool:get_invoice_by_id '%s' DB %.3f s", invoice_id, time.perf_counter() - t0)
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
     return {
@@ -203,46 +189,38 @@ TOOLS = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4.  SHARED HELPERS
+# 4.  HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
-    """Return an OpenAI thread ID stored in session, creating one if missing."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
-        log.debug("Created new OpenAI thread: %s", session['thread_id'])
+        log.debug("new thread %s", session["thread_id"])
     return session["thread_id"]
 
 
 def _safe_add_user_message(tid: str, content: str) -> str:
-    """
-    Add a user message; if the thread is locked by an active run,
-    create a new thread transparently.
-    """
     try:
         client.beta.threads.messages.create(thread_id=tid, role="user", content=content)
-        log.debug("Added user message to thread %s", tid)
         return tid
-    except openai.BadRequestError as exc:  # happens if run is still running
+    except openai.BadRequestError as exc:
         if "while a run" not in str(exc):
             raise
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
         client.beta.threads.messages.create(thread_id=new_tid, role="user", content=content)
-        log.warning("Thread %s locked; switched to new thread %s", tid, new_tid)
+        log.warning("thread %s locked → new %s", tid, new_tid)
         return new_tid
 
 
 def _run_tool(c: Any) -> str:
-    """Execute one tool call and return its output string."""
     try:
-        args_raw = getattr(c.function, "arguments", "") or ""
-        args = json.loads(args_raw) if args_raw else {}
+        args = json.loads(c.function.arguments or "{}")
     except json.JSONDecodeError as exc:
-        return f"Invalid JSON for tool '{c.function.name}': {exc}"
+        return f"Invalid JSON: {exc}"
 
     fn = c.function.name
     t0 = time.perf_counter()
-    log.info("▶ Running tool %s with args %s", fn, args)
+    log.info("▶ tool %s %s", fn, args)
     try:
         if fn == "get_current_weather":
             return get_current_weather(**args)
@@ -250,11 +228,10 @@ def _run_tool(c: Any) -> str:
             return json.dumps(get_invoice_by_id(**args))
         return f"Unknown tool {fn}"
     finally:
-        log.info("▲ Tool %s finished in %.3f s", fn, time.perf_counter() - t0)
+        log.info("▲ tool %s done %.3f s", fn, time.perf_counter() - t0)
 
 
 def _arguments_ready(call: Any) -> bool:
-    """True if call.function.arguments contains valid JSON."""
     try:
         return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
     except Exception:
@@ -262,84 +239,20 @@ def _arguments_ready(call: Any) -> bool:
 
 
 def _tool_call_ready(call: Any) -> bool:
-    """Ready when both id and arguments are present."""
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  BLOCKING CHAT   (/chat)  — with latency logs
+# 5.  STREAMING CHAT  (detailed timing)
 # ──────────────────────────────────────────────────────────────────────────────
-@app.route("/chat", methods=["POST"])
-def chat_sync():
-    user_msg = (request.json or {}).get("message", "").strip()
-    if not user_msg:
-        return jsonify({"error": "Empty message"}), 400
-
-    overall_t0 = time.perf_counter()
-    tid = ensure_thread()
-    tid = _safe_add_user_message(tid, user_msg)
-
-    run_t0 = time.perf_counter()
-    run = client.beta.threads.runs.create(
-        thread_id=tid,
-        assistant_id=ASSISTANT_ID,
-        tools=TOOLS,
-        **({"model": MODEL} if MODEL else {}),
-    )
-    log.info("Run %s created in %.3f s", run.id, time.perf_counter() - run_t0)
-
-    interval = 0.1  # start aggressive, back off gradually
-    poll_count = 0
-    while True:
-        poll_count += 1
-        status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
-        if status.status == "requires_action":
-            log.info("Run %s requires_action", run.id)
-            calls = status.required_action.submit_tool_outputs.tool_calls
-            outputs = [
-                {"tool_call_id": c.id, "output": _run_tool(c)}
-                for c in calls
-                if _tool_call_ready(c)
-            ]
-            client.beta.threads.runs.submit_tool_outputs(
-                thread_id=tid, run_id=run.id, tool_outputs=outputs
-            )
-            interval = 0.1  # reset interval after tool execution
-        elif status.status == "completed":
-            log.info("Run %s completed after %d polls", run.id, poll_count)
-            break
-        elif status.status in {"failed", "cancelled", "expired"}:
-            log.error("Run %s ended with status %s", run.id, status.status)
-            return jsonify({"error": f"Run {status.status}"}), 500
-        time.sleep(interval)
-        interval = min(interval * 1.5, 0.5)
-
-    msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
-    for msg in msgs.data:
-        if msg.role == "assistant":
-            log.info("chat_sync finished in %.3f s (total)", time.perf_counter() - overall_t0)
-            return jsonify({"response": msg.content[0].text.value})
-    log.error("No assistant response in thread %s", tid)
-    return jsonify({"error": "No assistant response"}), 500
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream)  — key events logged
-# ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(
-    ev: Any, *, run_id_hint: str | None = None
-) -> tuple[list[Any], str] | None:
-    """Return (tool_calls, run_id) only when each call has id + valid args."""
+def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
         if tc and run_id_hint and all(_tool_call_ready(c) for c in tc):
             return tc, run_id_hint
         sd = getattr(delta, "step_details", None)
-        if (
-            sd
-            and getattr(sd, "tool_calls", None)
-            and run_id_hint
-            and all(_tool_call_ready(c) for c in sd.tool_calls)
-        ):
+        if sd and getattr(sd, "tool_calls", None) and run_id_hint and \
+                all(_tool_call_ready(c) for c in sd.tool_calls):
             return sd.tool_calls, run_id_hint
 
     step = getattr(ev.data, "step", None)
@@ -356,16 +269,8 @@ def _extract_tool_calls(
     return None
 
 
-def _follow_stream_after_tools(
-    run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str
-) -> None:
-    """Execute finished tools, then keep streaming."""
-    log.info("Stream run %s executing %d tool(s)", run_id, len(calls))
-    outs = [
-        {"tool_call_id": c.id, "output": _run_tool(c)}
-        for c in calls
-        if _tool_call_ready(c)
-    ]
+def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
+    outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls if _tool_call_ready(c)]
     if not outs:
         return
     follow = client.beta.threads.runs.submit_tool_outputs(
@@ -374,26 +279,34 @@ def _follow_stream_after_tools(
     pipe_events(follow, q, tid)
 
 
-def pipe_events(events, q: queue.Queue, tid: str) -> None:
+def pipe_events(events, q: queue.Queue, tid: str):
     run_id: str | None = None
+    t0 = time.perf_counter()
+    first_tok: float | None = None
+    n_frag = 0
+
     for ev in events:
         if ev.event == "thread.run.created":
             run_id = ev.data.id
-            log.info("Stream run %s created", run_id)
+            log.info("run %s created", run_id)
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
             run_id = ev.data.run_id
 
         if ev.event == "thread.message.delta":
             for part in ev.data.delta.content or []:
                 if part.type == "text":
+                    if first_tok is None:
+                        first_tok = time.perf_counter()
+                        log.info("run %s first-token %.3f s", run_id, first_tok - t0)
+                    n_frag += 1
                     q.put(part.text.value)
-        elif (
-            tc_block := _extract_tool_calls(ev, run_id_hint=run_id)
-        ) is not None:
+
+        elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
+
         elif ev.event == "thread.run.completed":
-            log.info("Stream run %s completed", run_id)
+            log.info("run %s done (%d frags, %.3f s total)", run_id, n_frag, time.perf_counter() - t0)
             q.put(None)
             return
 
@@ -427,20 +340,16 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume() -> None:
-        """Background worker that owns the OpenAI stream."""
-        with app.app_context():  # ensure DB access in background thread
+        with app.app_context():
             first = client.beta.threads.runs.create(
-                thread_id=tid,
-                assistant_id=ASSISTANT_ID,
-                tools=TOOLS,
-                stream=True,
+                thread_id=tid, assistant_id=ASSISTANT_ID,
+                tools=TOOLS, stream=True,
                 **({"model": MODEL} if MODEL else {}),
             )
             pipe_events(first, q, tid)
-        log.info("chat_stream finished in %.3f s", time.perf_counter() - overall_t0)
+        log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
 
     threading.Thread(target=consume, daemon=True).start()
-
     return Response(
         sse_generator(q),
         mimetype="text/event-stream",
@@ -448,7 +357,7 @@ def chat_stream():
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 7.  INDEX / CSV / EDIT / EXPORT (unchanged; added a couple of tiny logs)
+# 6.  CSV / CRUD  (with logs)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -462,7 +371,6 @@ def index():
         df = pd.read_csv(f)
         new_clients: dict[str, Client] = {}
         invoices: list[Invoice] = []
-
         for _, row in df.iterrows():
             name = row["client_name"]
             cl = Client.query.filter_by(name=name).first() or new_clients.get(name)
@@ -481,22 +389,11 @@ def index():
         db.session.add_all(new_clients.values())
         db.session.add_all(invoices)
         db.session.commit()
-        log.info("CSV import: %d invoices, %d new clients (%.3f s)",
+        log.info("CSV import %d invoices, %d new clients %.3f s",
                  len(invoices), len(new_clients), time.perf_counter() - t0)
         flash("Invoices uploaded successfully.")
         return redirect("/")
-
     return render_template("index.html", invoices=Invoice.query.all())
-
-
-@app.route("/delete/<int:invoice_id>", methods=["POST"])
-def delete_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(inv)
-    db.session.commit()
-    log.info("Invoice %d deleted", invoice_id)
-    flash("Invoice deleted.")
-    return redirect("/")
 
 
 @app.route("/edit/<int:invoice_id>", methods=["POST"])
@@ -507,7 +404,7 @@ def edit_invoice(invoice_id: int):
     inv.status = request.form["status"]
     inv.client.email = request.form["client_email"]
     db.session.commit()
-    log.info("Invoice %d updated", invoice_id)
+    log.info("invoice %d updated", invoice_id)
     return jsonify(
         {
             "client_name": inv.client.name,
@@ -517,6 +414,16 @@ def edit_invoice(invoice_id: int):
             "status": inv.status,
         }
     )
+
+
+@app.route("/delete/<int:invoice_id>", methods=["POST"])
+def delete_invoice(invoice_id: int):
+    inv = Invoice.query.get_or_404(invoice_id)
+    db.session.delete(inv)
+    db.session.commit()
+    log.info("invoice %d deleted", invoice_id)
+    flash("Invoice deleted.")
+    return redirect("/")
 
 
 @app.route("/export")
@@ -538,23 +445,19 @@ def export_invoice(invoice_id: int | None = None):
     ).to_csv(index=False)
 
     fname = f"invoice_{invoice_id or 'all'}.csv"
-    log.info("Exported %s", fname)
+    log.info("export %s", fname)
     return (
         csv_data,
         200,
-        {
-            "Content-Type": "text/csv",
-            "Content-Disposition": f'attachment; filename="{fname}"',
-        },
+        {"Content-Type": "text/csv",
+         "Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 8.  ENTRY POINT
+# 7.  ENTRY POINT
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    # Use '0.0.0.0' inside Docker / Kubernetes;
-    # disable Flask reloader to prevent duplicate background threads.
-    log.info("Starting Flask on 0.0.0.0:5005")
+    log.info("Flask serving on 0.0.0.0:5005  (log-level=%s)", LOG_LEVEL)
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
