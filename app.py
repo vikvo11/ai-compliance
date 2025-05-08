@@ -29,21 +29,17 @@ cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
 MODEL = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-
 if not OPENAI_API_KEY:
-    log.critical("OPENAI_API_KEY is not set"); sys.exit(1)
+    log.critical("OPENAI_API_KEY is missing"); sys.exit(1)
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
-log.info("OpenAI ready (model=%s)", MODEL)
 
 # ─────────────────── 2. FLASK & DB ───────────────────────────
 os.makedirs("/app/data", exist_ok=True)
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
-app.config.update(
-    SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
-    SQLALCHEMY_TRACK_MODIFICATIONS=False,
-)
+app.config.update(SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
+                  SQLALCHEMY_TRACK_MODIFICATIONS=False)
 db = SQLAlchemy(app)
 
 
@@ -66,7 +62,7 @@ class Invoice(db.Model):
 with app.app_context():
     db.create_all()
 
-# ─────────────────── 3. TOOLS ────────────────────────────────
+# ─────────────────── 3. TOOL FUNCTIONS ───────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
 
@@ -92,8 +88,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
     cw = asyncio.run(_weather_for(*coord))
     t = cw.get("temperature")
     if unit == "fahrenheit":
-        t = round(t * 9 / 5 + 32, 1)
-        sig = "°F"
+        t = round(t * 9 / 5 + 32, 1); sig = "°F"
     else:
         sig = "°C"
     return f"The temperature in {location} is {t} {sig}."
@@ -145,66 +140,67 @@ _TOOL_MAP = {
 }
 
 # ─────────────────── 4. STREAM PARSER ────────────────────────
-def _run_tool_call(call) -> str:
-    fn = _TOOL_MAP.get(call.name)
-    args = json.loads(call.args) if isinstance(call.args, str) else call.args
-    res = fn(**args) if fn else f"Unknown tool {call.name}"
+def _run_tool(name: str, args_json: str) -> str:
+    try:
+        args = json.loads(args_json or "{}")
+    except json.JSONDecodeError:
+        return f"Invalid JSON for {name}: {args_json}"
+    fn = _TOOL_MAP.get(name)
+    res = fn(**args) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
 
-def _pipe(events, q: queue.Queue[str | None]) -> str:
-    """Push events into queue, handle tool-calls, return last response_id."""
-    pending_args: dict[str, list[str]] = {}
-    res_id: str | None = None
+def _pipe(stream, q: queue.Queue[str | None]) -> str:
+    """
+    Collect deltas, handle tool calls, write into queue.
+    Returns last response_id.
+    """
+    buf: dict[str, dict] = {}           # id -> {"name": str, "parts": list[str]}
+    resp_id: str | None = None
 
-    for ev in events:
-        name = getattr(ev, "event", None) or getattr(ev, "type", None)
+    for ev in stream:
+        typ = getattr(ev, "event", None) or getattr(ev, "type", None)
 
-        # created
-        if name == "response.created":
-            res_id = ev.response.id
+        # response starts
+        if typ == "response.created":
+            resp_id = ev.response.id
 
-        # text delta
+        # normal text token
         if hasattr(ev, "delta") and isinstance(ev.delta, str):
             q.put(ev.delta)
 
-        # tool-call header
+        # header with tool info
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
-                pending_args[tc.id] = []
+                buf[tc.id] = {"name": tc.function.name, "parts": []}
 
-        # args chunk
-        if name and "arguments.delta" in name:
+        # arguments chunk
+        if typ and "arguments.delta" in typ:
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
-            if tc_id and tc_id in pending_args:
-                pending_args[tc_id].append(ev.delta or "")
+            if tc_id and tc_id in buf:
+                buf[tc_id]["parts"].append(ev.delta or "")
 
-        # args ready (done)
-        if name and name.endswith("arguments.done"):
+        # arguments done
+        if typ and typ.endswith("arguments.done"):
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
-            if not tc_id:
-                continue
-            full_json = "".join(pending_args.get(tc_id, []))
-            call_stub = next(tc for tc in ev.tool_calls if tc.id == tc_id) if getattr(ev, "tool_calls", None) else ev
-            call_stub.args = full_json
-            output = _run_tool_call(call_stub)
-            follow = client.responses.submit_tool_outputs(
-                response_id=res_id,
-                tool_outputs=[{"tool_call_id": tc_id, "output": output}],
-                stream=True,
-            )
-            res_id = _pipe(follow, q)  # recurse, continue piping
+            if tc_id and tc_id in buf:
+                meta = buf.pop(tc_id)
+                full_json = "".join(meta["parts"])
+                output = _run_tool(meta["name"], full_json)
+                follow = client.responses.submit_tool_outputs(
+                    response_id=resp_id,
+                    tool_outputs=[{"tool_call_id": tc_id, "output": output}],
+                    stream=True,
+                )
+                resp_id = _pipe(follow, q)  # recurse, continue piping
 
-        # finished
-        if name in ("response.done", "response.completed", "response.output_text.done"):
-            q.put(None)
-            return res_id or ""
+        # end markers
+        if typ in ("response.done", "response.completed", "response.output_text.done"):
+            q.put(None); return resp_id or ""
 
-    q.put(None)
-    return res_id or ""
+    q.put(None); return resp_id or ""
 
-
-# ─────────────────── 5. SSE helpers ─────────────────────────
+# ─────────────────── 5. SSE ──────────────────────────────────
 def sse_gen(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
     hb = time.time() + 20
     while True:
@@ -212,8 +208,7 @@ def sse_gen(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
             chunk = q.get(timeout=1)
             if chunk is None:
                 yield b"event: done\ndata: [DONE]\n\n"; break
-            yield f"data: {chunk}\n\n".encode()
-            hb = time.time() + 20
+            yield f"data: {chunk}\n\n".encode(); hb = time.time() + 20
         except queue.Empty:
             if time.time() > hb:
                 yield b": keep-alive\n\n"; hb = time.time() + 20
@@ -225,7 +220,7 @@ def chat_stream():
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
-    last_id = session.get("prev_response_id")
+    prev_id = session.get("prev_response_id")
     q: queue.Queue[str | None] = queue.Queue()
 
     @copy_current_request_context
@@ -233,7 +228,7 @@ def chat_stream():
         stream = client.responses.create(
             model=MODEL,
             input=user_msg,
-            previous_response_id=last_id,
+            previous_response_id=prev_id,
             tools=TOOLS,
             stream=True,
         )
@@ -244,7 +239,7 @@ def chat_stream():
     return Response(sse_gen(q), mimetype="text/event-stream",
                     headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
-# ─────────────────── 7. CSV / CRUD ( unchanged )──────────────
+# ─────────────────── 7. CSV / CRUD  (unchanged) ──────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
