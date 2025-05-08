@@ -100,32 +100,31 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
 
     out = _run_tool(name, args_json)
 
-    # ── предпочитаем официальный метод, если он есть ──────────
-    if hasattr(client.responses, "actions"):                 # SDK ≥ 1.50
+    # 1.  SDK ≥ 1.50 → метод в .actions
+    if hasattr(client.responses, "actions"):
         submit = client.responses.actions.submit_tool_outputs
 
-    elif hasattr(client.responses, "submit_tool_outputs"):   # SDK 1.3–1.4
+    # 2.  SDK 1.3 – 1.4
+    elif hasattr(client.responses, "submit_tool_outputs"):
         submit = client.responses.submit_tool_outputs
 
-    else:                                                    # fallback
-        try:
-            from openai.resources.responses import ResponseObject as Cast
+    # 3.  very-old SDK  (<1.3)  →  прямой POST
+    else:
+        try:    from openai.resources.responses import ResponseObject as Cast
         except ImportError:
-            try:
-                from openai.resources.responses import Response as Cast
+            try:    from openai.resources.responses import Response as Cast
             except ImportError:
-                Cast = dict                              # самый грубый вариант
+                Cast = dict                          # fallback-парсер
 
         def submit(response_id, tool_outputs, stream):
-            # ⬇⬇ *без* ведущего /v1 !
-            path = f"responses/{response_id}/actions/submit_tool_outputs"
+            # ‼️ правильный относительный путь — БЕЗ “actions”
+            path = f"responses/{response_id}/submit_tool_outputs"
             return client.post(
                 path,
                 body={"tool_outputs": tool_outputs},
                 stream=stream,
                 cast_to=Cast,
             )
-    # ──────────────────────────────────────────────────────────
 
     follow = submit(
         response_id=resp_id,
