@@ -185,21 +185,14 @@ def _finish_tool(
     args_json: str,
     q: queue.Queue[str | None],
 ) -> str:
-    """Execute the tool, send its output back to OpenAI, and continue streaming."""
+    """Execute a tool, send its output to OpenAI, continue streaming."""
     log.info("RUN tool=%s id=%s args=%s", name, tool_call_id, args_json)
     print(f"DBG | RUN tool={name} id={tool_call_id}")
 
     output = _run_tool(name, args_json)
 
-    # ── 1. Make sure we have thread_id / run_id ────────────────────────────
-    if (not thread_id or not run_id) and hasattr(client.responses, "retrieve"):
-        info = client.responses.retrieve(response_id)
-        thread_id = thread_id or getattr(info, "thread_id", None)
-        run_id    = run_id    or getattr(info, "run_id", None)
-        print(f"DBG |   retrieved IDs  thread_id={thread_id}  run_id={run_id}")
-
-    # ── 2. Submit tool outputs via Beta endpoint (SDK ≥ 1.78) ──────────────
-    if thread_id and run_id and hasattr(client.beta.threads.runs, "submit_tool_outputs"):
+    # ── 1. If we already have thread & run IDs → Assistants endpoint ──────
+    if thread_id and run_id:
         follow = client.beta.threads.runs.submit_tool_outputs(
             thread_id=thread_id,
             run_id=run_id,
@@ -208,11 +201,13 @@ def _finish_tool(
         )
         return _pipe(follow, q, thread_id, run_id)
 
-    # ── 3. Last-chance guard: if IDs всё равно нет — логируем и отказываем ─
-    log.error("Cannot submit tool outputs: thread_id or run_id still None")
-    q.put(f"\n[internal error: missing thread/run IDs]\n")
-    q.put(None)
-    return response_id
+    # ── 2. Otherwise stay in Responses API ─────────────────────────────────
+    follow = client.responses.actions.submit_tool_outputs(
+        response_id=response_id,
+        tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
+        stream=True,
+    )
+    return _pipe(follow, q, thread_id, run_id)
 
 
 def _pipe(  # noqa: C901
