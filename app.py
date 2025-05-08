@@ -92,32 +92,84 @@ def _run_tool(name: str, args: str) -> str:
     fn = DISPATCH.get(name); res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
+# ─────────── replace the whole _pipe() definition with this ───────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
-    """Stream tokens, execute functions when required_action appears."""
+    """
+    Stream tokens → queue. Executes tool calls when аргументы готовы.
+    Поддерживает обе схемы: старую (required_action) и новую (tool_calls.done).
+    Возвращает последний response_id.
+    """
     resp_id = ""
+    buf: dict[str, dict] = {}        # id → {"name": str, "parts": list[str]}
+
     for ev in stream:
-        # id for resume
-        if hasattr(ev, "response"): resp_id = ev.response.id
+        # keep latest response_id to resume later
+        if getattr(ev, "response", None):
+            resp_id = ev.response.id
 
-        # send text chunks
-        if getattr(ev, "delta", None): q.put(str(ev.delta))
+        # normal text token
+        if isinstance(getattr(ev, "delta", None), str):
+            q.put(ev.delta)
 
-        # required_action: model готова получить tool_outputs
-        action = getattr(ev, "required_action", None)
-        if action and getattr(action, "submit_tool_outputs", None):
+        # ───── 1. NEW SCHEMA: response.tool_calls ─────────────
+        if getattr(ev, "tool_calls", None):
+            for tc in ev.tool_calls:
+                buf[tc.id] = {
+                    "name": getattr(tc.function, "name", getattr(tc, "name", "")),
+                    "parts": []
+                }
+                # if full args already present, run immediately
+                full = getattr(tc.function, "arguments", None)
+                if full:
+                    out = _run_tool(buf[tc.id]["name"], full)
+                    follow = client.responses.submit_tool_outputs(
+                        response_id=resp_id,
+                        tool_outputs=[{"tool_call_id": tc.id, "output": out}],
+                        stream=True,
+                    )
+                    resp_id = _pipe(follow, q)
+                    buf.pop(tc.id, None)
+
+        # streamed arguments
+        typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
+        if "arguments.delta" in typ:
+            tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
+            if tc_id and tc_id in buf:
+                buf[tc_id]["parts"].append(ev.delta or "")
+
+        # arguments done → run tool
+        if typ.endswith("arguments.done"):
+            tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
+            if tc_id and tc_id in buf:
+                full_json = "".join(buf[tc_id]["parts"])
+                out = _run_tool(buf[tc_id]["name"], full_json)
+                follow = client.responses.submit_tool_outputs(
+                    response_id=resp_id,
+                    tool_outputs=[{"tool_call_id": tc_id, "output": out}],
+                    stream=True,
+                )
+                resp_id = _pipe(follow, q)
+                buf.pop(tc_id, None)
+
+        # ───── 2. OLD SCHEMA: required_action ────────────────
+        act = getattr(ev, "required_action", None)
+        if act and getattr(act, "submit_tool_outputs", None):
             outs = []
-            for tc in action.submit_tool_outputs.tool_calls:
-                outs.append({"tool_call_id": tc.id, "output": _run_tool(tc.name, tc.args)})
+            for tc in act.submit_tool_outputs.tool_calls:
+                outs.append({"tool_call_id": tc.id,
+                             "output": _run_tool(tc.name, tc.args)})
             follow = client.responses.submit_tool_outputs(
                 response_id=ev.id, tool_outputs=outs, stream=True)
-            resp_id = _pipe(follow, q)   # recursion continues streaming
-            continue
+            resp_id = _pipe(follow, q)
 
-        # done markers
-        if getattr(ev, "event", None) in ("response.done", "response.completed") \
-           or getattr(ev, "type", None) in ("response.done", "response.completed"):
-            q.put(None); break
+        # final markers
+        if typ in ("response.done", "response.completed", "response.output_text.done"):
+            q.put(None)
+            return resp_id
+
+    q.put(None)
     return resp_id
+# ─────────────────────────────────────────────────────────────
 
 # ─────────────────── 5. SSE ──────────────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
