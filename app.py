@@ -5,16 +5,17 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import json
 import queue
 import threading
-import requests
-import sys
-import configparser
+import asyncio
+import functools
 from collections.abc import Sequence, Generator
 from typing import Any, Optional
 
+import httpx                     # faster HTTP client, async-friendly
 from flask import (
     Flask, render_template, request, redirect,
     flash, jsonify, session, Response
@@ -22,6 +23,7 @@ from flask import (
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
 import openai
+import configparser
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 0.  ENV & OPENAI
@@ -29,19 +31,23 @@ import openai
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
-                         fallback=os.getenv("OPENAI_API_KEY"))
-MODEL: Optional[str] = cfg.get("DEFAULT", "model",
-                               fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
-ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id",
-                            fallback=os.getenv("ASSISTANT_ID", "")).strip()
+OPENAI_API_KEY: str | None = cfg.get(
+    "DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY")
+)
+MODEL: Optional[str] = cfg.get(
+    "DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")
+).strip() or None
+ASSISTANT_ID: str = cfg.get(
+    "DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")
+).strip()
 
 if not OPENAI_API_KEY:
     sys.exit("❌  OPENAI_API_KEY is not configured.")
 if not ASSISTANT_ID:
     sys.exit("❌  ASSISTANT_ID is not configured.")
 
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+# single, warm HTTP connection pool for the lifetime of the app
+client = openai.OpenAI(api_key=OPENAI_API_KEY, max_retries=3, timeout=30)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1.  FLASK & DB
@@ -82,25 +88,45 @@ with app.app_context():
     db.create_all()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  ASSISTANT TOOLS
+# 2.  ASSISTANT TOOLS  (fast, cached, async)
 # ──────────────────────────────────────────────────────────────────────────────
-def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """Return a short string with the current weather for the location."""
-    try:
-        geo = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": location, "count": 1},
-            timeout=5,
-        ).json().get("results")
-        if not geo:
-            return f"Location '{location}' not found."
-        lat, lon = geo[0]["latitude"], geo[0]["longitude"]
-        cw = requests.get(
+_COORD_CACHE: dict[str, tuple[float, float]] = {}
+HTTP_TIMEOUT = httpx.Timeout(6.0)
+
+
+@functools.lru_cache(maxsize=2048)
+def _coords_for(city: str) -> tuple[float, float] | None:
+    """Return (lat, lon) from cache or external service."""
+    resp = httpx.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1},
+        timeout=HTTP_TIMEOUT,
+    )
+    res = resp.json().get("results")
+    if not res:
+        return None
+    return res[0]["latitude"], res[0]["longitude"]
+
+
+async def _weather_for(lat: float, lon: float) -> dict:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
+        resp = await ac.get(
             "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon,
-                    "current_weather": True},
-            timeout=5,
-        ).json().get("current_weather", {})
+            params={"latitude": lat, "longitude": lon, "current_weather": True},
+        )
+    return resp.json().get("current_weather", {})
+
+
+def get_current_weather(location: str, unit: str = "celsius") -> str:
+    """
+    Blocking wrapper around async tool: executed synchronously by the
+    OpenAI tool-calling runtime.
+    """
+    try:
+        coord = _coords_for(location)
+        if not coord:
+            return f"Location '{location}' not found."
+        cw = asyncio.run(_weather_for(*coord))
         return (
             f"The temperature in {location} is {cw.get('temperature')} °C "
             f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
@@ -129,12 +155,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_current_weather",
-            "description": "Get the current weather for a city",
+            "description": "Get current weather for a city",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "location": {"type": "string"},
-                    "unit": {"type": "string"},
+                    "unit": {"type": "string", "default": "celsius"},
                 },
                 "required": ["location"],
             },
@@ -147,9 +173,7 @@ TOOLS = [
             "description": "Return invoice data by invoice_id",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "invoice_id": {"type": "string"},
-                },
+                "properties": {"invoice_id": {"type": "string"}},
                 "required": ["invoice_id"],
             },
         },
@@ -168,22 +192,18 @@ def ensure_thread() -> str:
 
 def _safe_add_user_message(tid: str, content: str) -> str:
     """
-    Add user message; if the thread is locked by an active run,
+    Add a user message; if the thread is locked by an active run,
     create a new thread transparently.
     """
     try:
-        client.beta.threads.messages.create(thread_id=tid,
-                                            role="user",
-                                            content=content)
+        client.beta.threads.messages.create(thread_id=tid, role="user", content=content)
         return tid
-    except openai.BadRequestError as exc:
+    except openai.BadRequestError as exc:  # happens if run is still running
         if "while a run" not in str(exc):
             raise
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
-        client.beta.threads.messages.create(thread_id=new_tid,
-                                            role="user",
-                                            content=content)
+        client.beta.threads.messages.create(thread_id=new_tid, role="user", content=content)
         return new_tid
 
 
@@ -227,22 +247,26 @@ def index():
             return redirect(request.url)
 
         df = pd.read_csv(f)
+        new_clients: dict[str, Client] = {}
+        invoices: list[Invoice] = []
+
         for _, row in df.iterrows():
-            cl = Client.query.filter_by(name=row["client_name"]).first()
+            name = row["client_name"]
+            cl = Client.query.filter_by(name=name).first() or new_clients.get(name)
             if not cl:
-                cl = Client(name=row["client_name"],
-                            email=row.get("client_email") or "")
-                db.session.add(cl)
-                db.session.flush()
-            db.session.add(
+                cl = Client(name=name, email=row.get("client_email") or "")
+                new_clients[name] = cl
+            invoices.append(
                 Invoice(
                     invoice_id=row["invoice_id"],
                     amount=row["amount"],
                     date_due=row["date_due"],
                     status=row["status"],
-                    client_id=cl.id,
+                    client=cl,
                 )
             )
+        db.session.add_all(new_clients.values())
+        db.session.add_all(invoices)
         db.session.commit()
         flash("Invoices uploaded successfully.")
         return redirect("/")
@@ -281,9 +305,7 @@ def edit_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
-    rows = (
-        [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
-    )
+    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
     csv_data = pd.DataFrame(
         [
             {
@@ -310,6 +332,7 @@ def export_invoice(invoice_id: int | None = None):
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5.  BLOCKING CHAT   (/chat)
+#      (kept for compatibility, but with adaptive polling)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat", methods=["POST"])
 def chat_sync():
@@ -321,24 +344,32 @@ def chat_sync():
     tid = _safe_add_user_message(tid, user_msg)
 
     run = client.beta.threads.runs.create(
-        thread_id=tid, assistant_id=ASSISTANT_ID,
-        tools=TOOLS, **({"model": MODEL} if MODEL else {}),
+        thread_id=tid,
+        assistant_id=ASSISTANT_ID,
+        tools=TOOLS,
+        **({"model": MODEL} if MODEL else {}),
     )
 
+    interval = 0.1  # start aggressive, back off gradually
     while True:
         status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
         if status.status == "requires_action":
             calls = status.required_action.submit_tool_outputs.tool_calls
-            outputs = [{"tool_call_id": c.id, "output": _run_tool(c)}
-                       for c in calls if _tool_call_ready(c)]
+            outputs = [
+                {"tool_call_id": c.id, "output": _run_tool(c)}
+                for c in calls
+                if _tool_call_ready(c)
+            ]
             client.beta.threads.runs.submit_tool_outputs(
                 thread_id=tid, run_id=run.id, tool_outputs=outputs
             )
+            interval = 0.1  # reset interval after tool execution
         elif status.status == "completed":
             break
         elif status.status in {"failed", "cancelled", "expired"}:
             return jsonify({"error": f"Run {status.status}"}), 500
-        time.sleep(0.35)
+        time.sleep(interval)
+        interval = min(interval * 1.5, 0.5)  # exponential back-off up to 0.5 s
 
     msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
     for msg in msgs.data:
@@ -349,8 +380,9 @@ def chat_sync():
 # ──────────────────────────────────────────────────────────────────────────────
 # 6.  STREAMING CHAT  (/chat/stream)
 # ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
-                        ) -> tuple[list[Any], str] | None:
+def _extract_tool_calls(
+    ev: Any, *, run_id_hint: str | None = None
+) -> tuple[list[Any], str] | None:
     """Return (tool_calls, run_id) only when each call has id + valid args."""
     delta = getattr(ev.data, "delta", None)
     if delta:
@@ -358,8 +390,12 @@ def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
         if tc and run_id_hint and all(_tool_call_ready(c) for c in tc):
             return tc, run_id_hint
         sd = getattr(delta, "step_details", None)
-        if sd and getattr(sd, "tool_calls", None) and run_id_hint and \
-                all(_tool_call_ready(c) for c in sd.tool_calls):
+        if (
+            sd
+            and getattr(sd, "tool_calls", None)
+            and run_id_hint
+            and all(_tool_call_ready(c) for c in sd.tool_calls)
+        ):
             return sd.tool_calls, run_id_hint
 
     step = getattr(ev.data, "step", None)
@@ -376,11 +412,15 @@ def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
     return None
 
 
-def _follow_stream_after_tools(run_id: str, calls: Sequence[Any],
-                               q: queue.Queue, tid: str) -> None:
+def _follow_stream_after_tools(
+    run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str
+) -> None:
     """Execute finished tools, then keep streaming."""
-    outs = [{"tool_call_id": c.id, "output": _run_tool(c)}
-            for c in calls if _tool_call_ready(c)]
+    outs = [
+        {"tool_call_id": c.id, "output": _run_tool(c)}
+        for c in calls
+        if _tool_call_ready(c)
+    ]
     if not outs:
         return
     follow = client.beta.threads.runs.submit_tool_outputs(
@@ -398,10 +438,12 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
             run_id = ev.data.run_id
 
         if ev.event == "thread.message.delta":
-            for part in (ev.data.delta.content or []):
+            for part in ev.data.delta.content or []:
                 if part.type == "text":
                     q.put(part.text.value)
-        elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
+        elif (
+            tc_block := _extract_tool_calls(ev, run_id_hint=run_id)
+        ) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
         elif ev.event == "thread.run.completed":
@@ -440,8 +482,10 @@ def chat_stream():
         """Background worker that owns the OpenAI stream."""
         with app.app_context():  # ensure DB access in background thread
             first = client.beta.threads.runs.create(
-                thread_id=tid, assistant_id=ASSISTANT_ID,
-                tools=TOOLS, stream=True,
+                thread_id=tid,
+                assistant_id=ASSISTANT_ID,
+                tools=TOOLS,
+                stream=True,
                 **({"model": MODEL} if MODEL else {}),
             )
             pipe_events(first, q, tid)
@@ -460,4 +504,6 @@ def chat_stream():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    app.run(host="0.0.0.0", port=5005, debug=True)
+    # Use '0.0.0.0' inside Docker / Kubernetes;
+    # disable Flask reloader to prevent duplicate background threads.
+    app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
