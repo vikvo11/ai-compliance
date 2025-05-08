@@ -94,24 +94,40 @@ def _run_tool(name: str, args: str) -> str:
 
 # ─────────── replace the whole _pipe() definition with this ───────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
+    """
+    Читает события Responses-API, отправляет токены в очередь `q`,
+    исполняет функции (tool calls) и продолжает стрим после submit_tool_outputs.
+    Возвращает последний response_id, чтобы можно было продолжить диалог.
+
+    • Поддерживаются две схемы:
+        1. 2024-10+ — блоки `response.tool_calls.*`
+        2. 2023-06  — `required_action.submit_tool_outputs`
+    • В SSE попадают **только** текстовые токены; фрагменты JSON-аргументов
+      скрыты от пользователя.
+    """
     resp_id = ""
-    buf: dict[str, dict] = {}          # id → {"name": str, "parts": list[str]}
+    # tool_call_id → {"name": str, "parts": list[str]}
+    buf: dict[str, dict[str, list[str]]] = {}
 
     for ev in stream:
+        # имя события: в одних ревизиях `event`, в других `type`
         typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
 
-        # сохраняем id для resume
+        # сохраняем id ответа для возможного resume
         if getattr(ev, "response", None):
             resp_id = ev.response.id
 
-        # ───── выводим ТОЛЬКО текстовые дельты ────────────────
-        if typ == "response.output_text.delta" and isinstance(ev.delta, str):
+        # ─── выводим ТОЛЬКО текстовые дельты ──────────────────
+        # delta бывает у всех событий; у аргументов в typ есть "arguments"
+        if isinstance(getattr(ev, "delta", None), str) and "arguments" not in typ:
             q.put(ev.delta)
 
-        # ───── новая схема: declaration tool_calls ────────────
+        # ─── новая схема: объявление tool_calls ───────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
+
+                # если модель прислала полный JSON единовременно
                 full = getattr(tc.function, "arguments", None)
                 if full:
                     out = _run_tool(tc.function.name, full)
@@ -122,13 +138,13 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                     )
                     resp_id = _pipe(follow, q)
 
-        # ───── поток аргументов ───────────────────────────────
+        # ─── поток аргументов (по кусочкам) ───────────────────
         if "arguments.delta" in typ:
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
             if tc_id and tc_id in buf:
                 buf[tc_id]["parts"].append(ev.delta or "")
 
-        # ───── аргументы закончились — вызываем функцию ───────
+        # ─── аргументы закончились — вызываем функцию ─────────
         if typ.endswith("arguments.done"):
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
             if tc_id and tc_id in buf:
@@ -142,25 +158,31 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 resp_id = _pipe(follow, q)
                 buf.pop(tc_id, None)
 
-        # ───── старая схема: required_action ──────────────────
+        # ─── старая схема: required_action.submit_tool_outputs ─
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
             outs = []
             for tc in act.submit_tool_outputs.tool_calls:
-                outs.append({"tool_call_id": tc.id,
-                             "output": _run_tool(tc.name, tc.args)})
+                outs.append({
+                    "tool_call_id": tc.id,
+                    "output": _run_tool(tc.name, tc.args),
+                })
             follow = client.responses.submit_tool_outputs(
                 response_id=ev.id, tool_outputs=outs, stream=True)
             resp_id = _pipe(follow, q)
 
-        # ───── финальные маркеры ──────────────────────────────
-        if typ in ("response.done", "response.completed", "response.output_text.done"):
+        # ─── финальные маркеры потока ─────────────────────────
+        if typ in (
+            "response.done",
+            "response.completed",
+            "response.output_text.done",
+        ):
             q.put(None)
             return resp_id
 
+    # safety-exit (не должно случаться, но на всякий)
     q.put(None)
     return resp_id
-# ─────────────────────────────────────────────────────────────
 
 # ─────────────────── 5. SSE ──────────────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
