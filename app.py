@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, new SDK)
-# NOTE: comments are in English as requested
+# All comments in English as requested
 from __future__ import annotations
 
 import os
@@ -180,14 +180,31 @@ def ensure_thread() -> str:
 def _run_tool(c: Any) -> str:
     """
     Execute one tool call and return its output string.
+    Robust against bad / empty JSON from partial deltas.
     """
-    args = json.loads(c.function.arguments)
+    try:
+        args_raw = getattr(c.function, "arguments", "") or ""
+        args = json.loads(args_raw) if args_raw else {}
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON for tool '{c.function.name}': {exc}"
+
     fn = c.function.name
     if fn == "get_current_weather":
         return get_current_weather(**args)
     if fn == "get_invoice_by_id":
         return json.dumps(get_invoice_by_id(**args))
     return f"Unknown tool {fn}"
+
+
+def _arguments_ready(call: Any) -> bool:
+    """
+    Return True if the tool-call object already contains non-empty, valid JSON
+    in `call.function.arguments`.
+    """
+    try:
+        return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
+    except Exception:
+        return False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -339,30 +356,39 @@ def _extract_tool_calls(
     run_id_hint: str | None = None
 ) -> tuple[list[Any], str] | None:
     """
-    Inspect an event and, if it contains tool_calls, return (tool_calls, run_id).
-    For RunStepDeltaEvent we fall back to run_id_hint because run_id is absent
-    in SDK >= 1.33.
+    Return (tool_calls, run_id) only when every call already has
+    non-empty, JSON-parsable arguments.
     """
     # A) thread.run.step.delta (RunStepDeltaEvent)
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
-        if tc and run_id_hint:
+        if (
+            tc and run_id_hint and
+            all(_arguments_ready(c) for c in tc)
+        ):
             return tc, run_id_hint
         # v1.18 style: delta.step_details.tool_calls
         sd = getattr(delta, "step_details", None)
-        if sd and getattr(sd, "tool_calls", None) and run_id_hint:
+        if (
+            sd and getattr(sd, "tool_calls", None) and run_id_hint and
+            all(_arguments_ready(c) for c in sd.tool_calls)
+        ):
             return sd.tool_calls, run_id_hint
 
     # B) thread.run.step.created / in_progress (RunStepEvent)
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
-        return step.tool_calls, step.run_id  # step.run_id is present here
+        tc = step.tool_calls
+        if all(_arguments_ready(c) for c in tc):
+            return tc, step.run_id  # step.run_id exists here
 
     # C) thread.run.requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
-        return ra.submit_tool_outputs.tool_calls, ev.data.id  # id == run_id
+        tc = ra.submit_tool_outputs.tool_calls
+        if all(_arguments_ready(c) for c in tc):
+            return tc, ev.data.id  # id == run_id
 
     return None
 
@@ -374,9 +400,16 @@ def _follow_stream_after_tools(
     tid: str
 ) -> None:
     """
-    Execute functions, then continue streaming the same run.
+    Execute completed tools, then continue streaming.
     """
-    outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
+    outs = [
+        {"tool_call_id": c.id, "output": _run_tool(c)}
+        for c in calls
+        if _arguments_ready(c)
+    ]
+    if not outs:
+        # Nothing ready yet — continue without submitting anything.
+        return
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
         run_id=run_id,
@@ -390,14 +423,14 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
     """
     Recursively pipe an event stream into a queue, handling tool calls.
     """
-    run_id: str | None = None  # will be filled as soon as we see it
+    run_id: str | None = None
 
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # Track run_id as early as possible
+        # Track run_id as soon as it becomes available
         if ev.event == "thread.run.created":
-            run_id = ev.data.id  # run.id
+            run_id = ev.data.id
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
             run_id = ev.data.run_id
 
@@ -407,12 +440,12 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # 2) Possible tool_calls
+        # 2) Tool calls (when arguments are ready)
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
-            tool_calls, run_id = tc_block  # update run_id if needed
+            tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
 
-        # 3) Run complete
+        # 3) Run finished
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
@@ -420,7 +453,7 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
     """
-    Convert queue items to Server-Sent Events responses.
+    Convert queue items to Server-Sent Events.
     """
     heartbeat_at = time.time() + 20
     while True:
