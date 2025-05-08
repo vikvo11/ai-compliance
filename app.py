@@ -94,83 +94,95 @@ def _run_tool(name: str, args: str) -> str:
 
 # ─────────── replace the whole _pipe() definition with this ───────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
-    """Парсит поток Responses API (обе схемы funcs), пишет логи, шлёт текст в SSE."""
-    log.info("PIPE START")
     resp_id = ""
-
-    # универсальный буфер: id → {"name": str, "parts": list[str]}
-    buf: dict[str, dict[str, list[str]]] = {}
+    buf: dict[str, dict] = {}        # tc_id → {"name": str, "parts": list[str]}
 
     for ev in stream:
         typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
         delta = getattr(ev, "delta", None)
         log.info("▶ %s  delta=%s", typ, bool(delta))
 
+        # save last response.id
         if getattr(ev, "response", None):
             resp_id = ev.response.id
 
-        # ─── обычные текстовые токены ─────────────────────────────
+        # plain text
         if isinstance(delta, str) and "arguments" not in typ:
             q.put(delta)
 
-        # ─── ❶ СТАРАЯ схема: response.tool_calls ─────────────────
+        # ── ❶ СТАРАЯ схема: response.tool_calls ──────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
                 full = getattr(tc.function, "arguments", None)
-                if full:                         # одномоментный JSON
-                    _finish_tool(resp_id, tc.id, tc.function.name, full, q)
+                if full:
+                    resp_id = _finish_tool(resp_id, tc.id, tc.function.name, full, q)
 
-        # ─── ❷ НОВАЯ схема: output_item + arguments.* ────────────
+        # ── ❷ НОВАЯ схема: output_item.added + arguments.* ───
         if typ == "response.output_item.added":
-            itm = ev.output_item                 # pydantic-объект
-            if getattr(itm, "type", "") == "function_call":
-                buf[itm.id] = {"name": itm.function.name, "parts": []}
-                log.debug("  output_item id=%s  func=%s", itm.id, itm.function.name)
+            # --- достаём объект item как сможем ---
+            item = (
+                getattr(ev, "item", None)
+                or getattr(ev, "output_item", None)
+                or ev.model_dump(exclude_none=True).get("item")
+            )
+            if item and item.get("type") == "function_call":
+                iid = item["id"]
+                fname = item["function"]["name"]
+                buf[iid] = {"name": fname, "parts": []}
+                log.info("  item declared id=%s  func=%s", iid, fname)
 
-        if "function_call_arguments.delta" in typ:
-            iid = getattr(ev, "output_item_id", None)
+        # поток аргументов
+        if "function_call_arguments.delta" in typ or "arguments.delta" in typ:
+            iid = (
+                getattr(ev, "output_item_id", None)
+                or getattr(ev, "item_id", None)
+                or getattr(ev, "tool_call_id", None)
+            )
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
-        if typ.endswith("function_call_arguments.done"):
-            iid = getattr(ev, "output_item_id", None)
+        # последний чанк
+        if typ.endswith("function_call_arguments.done") or typ.endswith("arguments.done"):
+            iid = (
+                getattr(ev, "output_item_id", None)
+                or getattr(ev, "item_id", None)
+                or getattr(ev, "tool_call_id", None)
+            )
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
-                _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
+                resp_id = _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
                 buf.pop(iid, None)
 
-        # ─── required_action (fallback для very old SDK) ─────────
+        # ── fallback: required_action.submit_tool_outputs ─────
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
-            outs = [{"tool_call_id": tc.id,
-                     "output": _run_tool(tc.name, tc.args)}
+            outs = [{"tool_call_id": tc.id, "output": _run_tool(tc.name, tc.args)}
                     for tc in act.submit_tool_outputs.tool_calls]
             follow = client.responses.submit_tool_outputs(
                 response_id=ev.id, tool_outputs=outs, stream=True)
             resp_id = _pipe(follow, q)
 
-        # ─── финал ───────────────────────────────────────────────
+        # finish markers
         if typ in ("response.done", "response.completed", "response.output_text.done"):
             q.put(None)
-            log.info("PIPE END")
             return resp_id
 
     q.put(None)
-    log.info("PIPE END (no explicit done)")
     return resp_id
 
 
-# helper: завершить tool-call и продолжить стрим
-def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str, q):
-    log.info("  RUN tool %s  id=%s  args=%s", name, tc_id, args_json)
+# ─── helper: завершить tool_call и продолжить поток ──────────
+def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
+                 q: queue.Queue[str | None]) -> str:
+    log.info("  RUN tool %s id=%s", name, tc_id)
     out = _run_tool(name, args_json)
     follow = client.responses.submit_tool_outputs(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    _pipe(follow, q)       # рекурсивно продолжаем стрим
+    return _pipe(follow, q)          # рекурсия; вернёт последний resp_id
 
 # ─────────────────── 5. SSE ──────────────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
