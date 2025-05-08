@@ -199,7 +199,7 @@ def _wait_until_no_active_runs(tid: str, timeout: float = 60.0) -> None:
         runs = client.beta.threads.runs.list(thread_id=tid, limit=20).data
         active = [r for r in runs if r.status not in done]
         if not active:
-            return  # nothing is running
+            return
         if time.time() > end_at:
             ids = ", ".join(r.id for r in active)
             raise RuntimeError(f"Thread still has active runs: {ids}")
@@ -426,14 +426,23 @@ def chat_stream():
 
     def consume():
         print("[DEBUG] consume() started", flush=True)
-        first = client.beta.threads.runs.create(
+
+        # 1️⃣ create run (no streaming) → get run.id
+        run = client.beta.threads.runs.create(
             thread_id=tid,
             assistant_id=ASSISTANT_ID,
             tools=TOOLS,
-            stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        pipe_events(first, q, tid, first.id)
+
+        # 2️⃣ open stream on that run
+        events = client.beta.threads.runs.retrieve(
+            thread_id=tid,
+            run_id=run.id,
+            stream=True,
+        )
+
+        pipe_events(events, q, tid, run.id)
         print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
