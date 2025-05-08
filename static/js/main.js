@@ -1,9 +1,8 @@
 /* main.js */
 /* Comments in English as requested. -------------------------------------------
    Streaming chat (SSE) + file-drop, animations, invoice edit, auto-theme, etc.
-   NEW ➜ Added:
-     • chatBusy flag to block sending while AI is thinking
-     • animated "…" during assistant typing
+   NEW ➜ user bubbles are grey (.message.user) and assistant bubbles light-green
+         (.message.assistant). chatBusy + animated ellipsis preserved.
 ------------------------------------------------------------------------------- */
 
 /* --------------------------------
@@ -15,7 +14,7 @@ function handleDragLeave(e) {
   e.preventDefault(); dragCounter--;
   if (dragCounter === 0) document.getElementById('drop-area').style.display = 'none';
 }
-document.addEventListener('dragenter', (e) => {
+document.addEventListener('dragenter', e => {
   e.preventDefault(); dragCounter++;
   document.getElementById('drop-area').style.display = 'flex';
 });
@@ -40,17 +39,17 @@ function toggleInvoices() {
 }
 
 /* --------------------------------
-   FADE-IN ANIMATION ON SCROLL
+   FADE-IN ON SCROLL
 ----------------------------------- */
 document.querySelectorAll('.fade').forEach(el => {
-  const io = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) { el.classList.add('show'); io.unobserve(el); }
+  const io = new IntersectionObserver(e => {
+    if (e[0].isIntersecting) { el.classList.add('show'); io.unobserve(el); }
   }, { threshold: 0.3 });
   io.observe(el);
 });
 
 /* --------------------------------
-   TOAST NOTIFICATIONS
+   TOAST
 ----------------------------------- */
 function showToast(msg) {
   const c = document.getElementById('toast-container');
@@ -84,7 +83,7 @@ function toggleEdit(id) {
 }
 
 /* --------------------------------
-   TYPE EFFECT & TERMINAL SIMULATIONS
+   TYPE EFFECT & TERMINAL DEMOS
 ----------------------------------- */
 function typeInto(el, txt, speed = 60, cb) {
   let i = 0;
@@ -93,26 +92,26 @@ function typeInto(el, txt, speed = 60, cb) {
       if ('placeholder' in el) el.placeholder = txt.slice(0, ++i);
       else el.value += txt[i++ - 1];
       setTimeout(t, speed);
-    } else if (cb) cb();
+    } else cb?.();
   })();
 }
 function printLines(id, lines, delay = 900) {
-  const tgt = document.getElementById(id); let i = 0;
+  const el = document.getElementById(id); let i = 0;
   (function n() {
-    if (i < lines.length) { tgt.innerHTML += lines[i++] + '<br>'; setTimeout(n, delay); }
-    else tgt.innerHTML += '<span class="cursor"></span>';
+    if (i < lines.length) { el.innerHTML += lines[i++] + '<br>'; setTimeout(n, delay); }
+    else el.innerHTML += '<span class="cursor"></span>';
   })();
 }
-const obs = (sel, cb) => {
+const onceVisible = (sel, cb) => {
   const el = document.querySelector(sel); if (!el) return;
   const io = new IntersectionObserver(e => { if (e[0].isIntersecting) { cb(); io.disconnect(); } }, { threshold: 0.5 });
   io.observe(el);
 };
 
-/* Demo animations */
-obs('#demo', () => {
+/* trigger demos */
+onceVisible('#demo', () => {
   typeInto(companyField, 'Acme Corporation', 60, () => {
-    setTimeout(() => typeInto(reportField, 'Q4 Revenue Report'), 300);
+    setTimeout(() => typeInto(reportField,'Q4 Revenue Report'), 300);
     setTimeout(() => typeInto(dateField,  '31 Jan 2025'),       800);
   });
   printLines('terminal-main', [
@@ -122,7 +121,7 @@ obs('#demo', () => {
     '→ Status: ✅ Filed Successfully!'
   ]);
 });
-obs('#actions', () => {
+onceVisible('#actions', () => {
   printLines('term-extract', [
     '> AI.parse("invoices.zip")',
     '→ 124 invoices processed',
@@ -142,53 +141,52 @@ obs('#actions', () => {
 });
 
 /* --------------------------------
-   CRACK GLASS ANIMATION
+   CRACK GLASS
 ----------------------------------- */
 function crackGlass() {
   const block = document.getElementById('ai-extract-block');
-  const cv    = document.getElementById('crack-effect'); if (!cv) return;
-  const ctx   = cv.getContext('2d'); if (!ctx) return;
+  const cv = document.getElementById('crack-effect'); if (!cv) return;
+  const ctx = cv.getContext('2d'); if (!ctx) return;
 
   cv.style.display = 'block'; cv.style.opacity = '1'; cv.style.transition = '';
-  cv.width = 300; cv.height = 200; ctx.clearRect(0, 0, cv.width, cv.height);
+  cv.width = 300; cv.height = 200; ctx.clearRect(0,0,cv.width,cv.height);
 
-  navigator.vibrate?.([100, 50, 100]);
-  block.classList.add('vibrate'); setTimeout(() => block.classList.remove('vibrate'), 700);
+  navigator.vibrate?.([100,50,100]);
+  block.classList.add('vibrate'); setTimeout(()=>block.classList.remove('vibrate'),700);
 
-  const [cx, cy] = [cv.width / 2, cv.height / 2];
-  for (let i = 0; i < 24; i++) {
-    const ang = i * Math.PI * 2 / 24, len = 50 + Math.random() * 100;
-    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ang)*len, cy + Math.sin(ang)*len);
-    ctx.strokeStyle = `rgba(100,100,100,${0.5+Math.random()*0.5})`;
-    ctx.lineWidth   = 0.5 + Math.random()*2; ctx.stroke();
+  const [cx,cy]=[cv.width/2,cv.height/2];
+  for(let i=0;i<24;i++){
+    const ang=i*Math.PI*2/24,len=50+Math.random()*100;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(ang)*len,cy+Math.sin(ang)*len);
+    ctx.strokeStyle=`rgba(100,100,100,${.5+Math.random()*0.5})`;
+    ctx.lineWidth=.5+Math.random()*2; ctx.stroke();
   }
-  for (let r = 20; r <= 100; r += 20) {
-    ctx.beginPath(); ctx.arc(cx, cy, r + Math.random()*5, 0, Math.PI*2);
-    ctx.strokeStyle = `rgba(120,120,120,${Math.random()*0.4+0.3})`;
-    ctx.lineWidth   = 0.3 + Math.random(); ctx.stroke();
+  for(let r=20;r<=100;r+=20){
+    ctx.beginPath(); ctx.arc(cx,cy,r+Math.random()*5,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(120,120,120,${Math.random()*0.4+0.3})`;
+    ctx.lineWidth=.3+Math.random(); ctx.stroke();
   }
-  setTimeout(() => { cv.style.transition = 'opacity .8s'; cv.style.opacity = '0';
-    setTimeout(() => { cv.style.display = 'none'; cv.style.transition = ''; }, 800);
-  }, 1300);
+  setTimeout(()=>{ cv.style.transition='opacity .8s'; cv.style.opacity='0';
+    setTimeout(()=>{ cv.style.display='none'; cv.style.transition=''; },800);
+  },1300);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  chatBox.style.display = 'none';
-  chatBox.style.width   = '340px';
-  chatBox.style.height  = 'auto';
-  chatBox.querySelector('.messages').style.maxHeight = '300px';
+  chatBox.style.display='none';
+  chatBox.style.width='340px';
+  chatBox.querySelector('.messages').style.maxHeight='300px';
 
-  document.getElementById('expand-chat')?.addEventListener('click', () => {
-    if (chatBox.style.width === '600px') {
-      chatBox.style.width = '340px'; chatBox.style.height = 'auto';
-      chatBox.querySelector('.messages').style.maxHeight = '300px';
-    } else {
-      chatBox.style.display = 'flex'; chatBox.style.flexDirection = 'column';
-      chatBox.style.width   = '600px'; chatBox.style.height = '80vh';
-      chatBox.querySelector('.messages').style.maxHeight = '';
+  document.getElementById('expand-chat')?.addEventListener('click',()=>{
+    if(chatBox.style.width==='600px'){
+      chatBox.style.width='340px'; chatBox.style.height='auto';
+      chatBox.querySelector('.messages').style.maxHeight='300px';
+    }else{
+      chatBox.style.display='flex'; chatBox.style.flexDirection='column';
+      chatBox.style.width='600px'; chatBox.style.height='80vh';
+      chatBox.querySelector('.messages').style.maxHeight='';
     }
   });
-  document.getElementById('ai-extract-block')?.addEventListener('click', crackGlass);
+  document.getElementById('ai-extract-block')?.addEventListener('click',crackGlass);
 });
 
 /* --------------------------------
@@ -200,121 +198,104 @@ const chatInput = chatBox.querySelector('textarea');
 const sendBtn   = chatBox.querySelector('button.send');
 const USE_STREAM = true;
 
-let chatBusy = false;          // NEW – flag
+let chatBusy=false;
 
-function addMessage(text, cls = 'message') {
-  const d = document.createElement('div');
-  d.className = cls; d.textContent = text;
-  const msgPane = chatBox.querySelector('.messages');
-  msgPane.appendChild(d);
-  msgPane.scrollTop = msgPane.scrollHeight;
+function addMessage(text, cls='message'){          // cls: e.g. 'message user'
+  const d=document.createElement('div');
+  d.className=cls; d.textContent=text;
+  const pane=chatBox.querySelector('.messages');
+  pane.appendChild(d); pane.scrollTop=pane.scrollHeight;
   return d;
 }
 
-launcher.addEventListener('click', () => {
-  if (chatBox.style.display === 'flex') { chatBox.style.display = 'none'; return; }
-  chatBox.style.display = 'flex'; chatBox.style.flexDirection = 'column';
-  chatInput.disabled = false; sendBtn.disabled = false; chatInput.focus();
+launcher.addEventListener('click',()=>{
+  if(chatBox.style.display==='flex'){ chatBox.style.display='none'; return; }
+  chatBox.style.display='flex'; chatBox.style.flexDirection='column';
+  chatInput.disabled=false; sendBtn.disabled=false; chatInput.focus();
 });
 
-/* Ellipsis animation helpers ---------------------------- */
-function startEllipsis(el) {               // NEW
-  let dots = 1;
-  el.textContent = '.';
-  el._ellipsis = setInterval(() => {
-    dots = (dots % 3) + 1;
-    el.textContent = '.'.repeat(dots);
-  }, 400);
+/* Ellipsis */
+function startEllipsis(el){
+  let dots=1; el.textContent='.'; 
+  el._ell=setInterval(()=>{ dots=(dots%3)+1; el.textContent='.'.repeat(dots); },400);
 }
-function stopEllipsis(el) {                // NEW
-  clearInterval(el._ellipsis); delete el._ellipsis;
-}
+function stopEllipsis(el){ clearInterval(el._ell); delete el._ell; }
 
-/* Send message ------------------------------------------ */
-async function sendMessage() {
-  const message = chatInput.value.trim();
-  if (!message || chatBusy) return;        // NEW – block if busy
+/* Send */
+async function sendMessage(){
+  const msg=chatInput.value.trim();
+  if(!msg||chatBusy) return;
 
-  chatBusy = true;                         // NEW
-  chatInput.disabled = true; sendBtn.disabled = true;
+  chatBusy=true; chatInput.disabled=true; sendBtn.disabled=true;
 
-  addMessage(message, 'message');          // user bubble
-  chatInput.value = '';
+  addMessage(msg,'message user'); chatInput.value='';
 
-  const aiDiv = addMessage('', 'message typing');
-  startEllipsis(aiDiv);                    // NEW
+  const aiDiv=addMessage('', 'message assistant typing');
+  startEllipsis(aiDiv);
 
-  const pushChunk = (chunk) => {
-    if (aiDiv.classList.contains('typing')) {
-      stopEllipsis(aiDiv); aiDiv.textContent = ''; aiDiv.classList.remove('typing');
+  const push=(chunk)=>{
+    if(aiDiv.classList.contains('typing')){
+      stopEllipsis(aiDiv); aiDiv.textContent=''; aiDiv.classList.remove('typing');
     }
-    aiDiv.textContent += chunk;
-    chatBox.querySelector('.messages').scrollTop =
+    aiDiv.textContent+=chunk;
+    chatBox.querySelector('.messages').scrollTop=
       chatBox.querySelector('.messages').scrollHeight;
   };
 
-  try {
-    if (USE_STREAM) {
-      const res = await fetch('/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
+  try{
+    if(USE_STREAM){
+      const res=await fetch('/chat/stream',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({message:msg})
       });
-      if (!res.ok || !res.body) throw new Error('Network error');
-      const rdr = res.body.getReader(), dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { value, done } = await rdr.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split('\n\n'); buf = parts.pop();
-        for (const p of parts) {
-          if (p.startsWith('event: done')) { rdr.cancel(); break; }
-          const line = p.split('\n').find(l => l.startsWith('data:'));
-          if (line) pushChunk(line.slice(6));
+      if(!res.ok||!res.body) throw new Error('Network error');
+      const rdr=res.body.getReader(), dec=new TextDecoder(); let buf='';
+      while(true){
+        const {value,done}=await rdr.read(); if(done) break;
+        buf+=dec.decode(value,{stream:true});
+        const parts=buf.split('\n\n'); buf=parts.pop();
+        for(const p of parts){
+          if(p.startsWith('event: done')){ rdr.cancel(); break; }
+          const line=p.split('\n').find(l=>l.startsWith('data:'));
+          if(line) push(line.slice(6));
         }
       }
-    } else {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
+    }else{
+      const res=await fetch('/chat',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({message:msg})
       });
-      const d = await res.json();
+      const d=await res.json();
       stopEllipsis(aiDiv);
-      aiDiv.textContent = d.response || d.error || 'No response';
+      aiDiv.textContent=d.response||d.error||'No response';
     }
-  } catch (err) {
-    console.error(err);
-    stopEllipsis(aiDiv);
-    aiDiv.textContent = 'Error contacting server';
-  } finally {
-    chatBusy = false;                      // NEW
-    chatInput.disabled = false; sendBtn.disabled = false;
-    aiDiv.classList.remove('typing');
-    chatInput.focus();
+  }catch(e){
+    console.error(e); stopEllipsis(aiDiv);
+    aiDiv.textContent='Error contacting server';
+  }finally{
+    chatBusy=false; chatInput.disabled=false; sendBtn.disabled=false;
+    aiDiv.classList.remove('typing'); chatInput.focus();
   }
 }
 
 sendBtn.addEventListener('click', sendMessage);
-chatInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+chatInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendMessage(); }
 });
 
 /* --------------------------------
-   AUTO THEME (LIGHT / NIGHT)
+   AUTO THEME
 ----------------------------------- */
-(function () {
-  const hour = new Date().getHours();
-  if (hour >= 19 || hour < 6) {
+(()=>{
+  const hr=new Date().getHours();
+  if(hr>=19||hr<6){
     document.body.classList.add('night-theme');
-    document.getElementById('star-background')?.style.setProperty('display', 'block');
+    document.getElementById('star-background')?.style.setProperty('display','block');
   }
 })();
-document.getElementById('theme-toggle')?.addEventListener('click', () => {
-  const body = document.body;
-  const stars = document.getElementById('star-background');
-  const night = body.classList.toggle('night-theme');
-  if (stars) stars.style.display = night ? 'block' : 'none';
-  localStorage.setItem('theme', night ? 'night' : 'light');
+document.getElementById('theme-toggle')?.addEventListener('click',()=>{
+  const body=document.body, stars=document.getElementById('star-background');
+  const night=body.classList.toggle('night-theme');
+  if(stars) stars.style.display=night?'block':'none';
+  localStorage.setItem('theme', night?'night':'light');
 });
