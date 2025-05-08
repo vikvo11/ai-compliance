@@ -1,6 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, new SDK)
+# NOTE: comments are in English as requested
 from __future__ import annotations
 
 import os
@@ -332,41 +333,48 @@ def chat_sync():
 # ──────────────────────────────────────────────────────────────────────────────
 # 6.  STREAMING CHAT  (/chat/stream) – robust tool-call handling
 # ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
+def _extract_tool_calls(
+    ev: Any,
+    *,
+    run_id_hint: str | None = None
+) -> tuple[list[Any], str] | None:
     """
-    Try every known spot where tool_calls may appear.
-    Return (tool_calls, run_id) or None if not present.
+    Inspect an event and, if it contains tool_calls, return (tool_calls, run_id).
+    For RunStepDeltaEvent we fall back to run_id_hint because run_id is absent
+    in SDK >= 1.33.
     """
-    # A) thread.run.step.delta
+    # A) thread.run.step.delta (RunStepDeltaEvent)
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
-        if tc:
-            return tc, ev.data.run_id
+        if tc and run_id_hint:
+            return tc, run_id_hint
         # v1.18 style: delta.step_details.tool_calls
         sd = getattr(delta, "step_details", None)
-        if sd and getattr(sd, "tool_calls", None):
-            return sd.tool_calls, ev.data.run_id
+        if sd and getattr(sd, "tool_calls", None) and run_id_hint:
+            return sd.tool_calls, run_id_hint
 
-    # B) thread.run.step.created / in_progress (step.tool_calls)
+    # B) thread.run.step.created / in_progress (RunStepEvent)
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
-        return step.tool_calls, ev.data.run_id
+        return step.tool_calls, step.run_id  # step.run_id is present here
 
     # C) thread.run.requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
-        return ra.submit_tool_outputs.tool_calls, ev.data.id
+        return ra.submit_tool_outputs.tool_calls, ev.data.id  # id == run_id
+
     return None
 
 
 def _follow_stream_after_tools(
-        run_id: str,
-        calls: Sequence[Any],
-        q: queue.Queue,
-        tid: str) -> None:
+    run_id: str,
+    calls: Sequence[Any],
+    q: queue.Queue,
+    tid: str
+) -> None:
     """
-    Execute functions, then stream the continuation of the run into the same queue.
+    Execute functions, then continue streaming the same run.
     """
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
@@ -375,34 +383,45 @@ def _follow_stream_after_tools(
         tool_outputs=outs,
         stream=True,
     )
-    pipe_events(follow, q, tid)        # recurse
+    pipe_events(follow, q, tid)  # recurse
 
 
 def pipe_events(events, q: queue.Queue, tid: str) -> None:
     """
-    Iterate (recursively) over event stream, pushing text chunks into `q`.
+    Recursively pipe an event stream into a queue, handling tool calls.
     """
+    run_id: str | None = None  # will be filled as soon as we see it
+
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # 1) text delta
+        # Track run_id as early as possible
+        if ev.event == "thread.run.created":
+            run_id = ev.data.id  # run.id
+        elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
+            run_id = ev.data.run_id
+
+        # 1) Text deltas
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # 2) Any event that *might* contain tool calls
-        elif (tc_block := _extract_tool_calls(ev)) is not None:
-            tool_calls, run_id = tc_block
+        # 2) Possible tool_calls
+        elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
+            tool_calls, run_id = tc_block  # update run_id if needed
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
 
-        # 3) Run finished
+        # 3) Run complete
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
+    """
+    Convert queue items to Server-Sent Events responses.
+    """
     heartbeat_at = time.time() + 20
     while True:
         try:
@@ -425,13 +444,18 @@ def chat_stream():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(thread_id=tid,
-                                        role="user",
-                                        content=user_msg)
+    client.beta.threads.messages.create(
+        thread_id=tid,
+        role="user",
+        content=user_msg
+    )
 
     q: queue.Queue[str | None] = queue.Queue()
 
-    def consume():
+    def consume() -> None:
+        """
+        Worker thread: start a streaming run and forward its events.
+        """
         print("[DEBUG] consume() started", flush=True)
         first = client.beta.threads.runs.create(
             thread_id=tid,
