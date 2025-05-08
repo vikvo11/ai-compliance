@@ -3,22 +3,14 @@
 # Flask + SQLAlchemy + OpenAI Responses API (blocking + streaming)
 from __future__ import annotations
 
-import os
-import sys
-import time
-import json
-import queue
-import threading
-import asyncio
-import functools
-import logging
+import os, sys, time, json, queue, threading, asyncio, functools, logging
 from collections.abc import Generator
 from typing import Any
 
 import httpx
 from flask import (
-    Flask, render_template, request, redirect,
-    flash, jsonify, session, Response, copy_current_request_context
+    Flask, render_template, request, redirect, flash,
+    jsonify, session, Response, copy_current_request_context
 )
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
@@ -26,7 +18,7 @@ import openai
 import configparser
 
 # ─────────────────────────────────────────────────────────────
-# 0. LOGGING (ISO-8601 → stdout)
+# 0. LOGGING
 # ─────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -92,14 +84,13 @@ with app.app_context():
 log.info("DB ready")
 
 # ─────────────────────────────────────────────────────────────
-# 3. TOOLS (cached + async)
+# 3. TOOLS
 # ─────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
 
 @functools.lru_cache(maxsize=2048)
 def _coords_for(city: str) -> tuple[float, float] | None:
-    """Return (lat, lon) for a city using Open-Meteo geocoder."""
     t0 = time.perf_counter()
     resp = httpx.get(
         "https://geocoding-api.open-meteo.com/v1/search",
@@ -112,7 +103,6 @@ def _coords_for(city: str) -> tuple[float, float] | None:
 
 
 async def _weather_for(lat: float, lon: float) -> dict:
-    """Async call to current-weather endpoint."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
         t0 = time.perf_counter()
         resp = await ac.get(
@@ -212,39 +202,34 @@ def _run_tool(call: dict[str, Any]) -> str:
 
 
 def _pipe_events(events, q: queue.Queue[str | None]) -> str | None:
-    """
-    Push Responses-API stream into SSE queue.
-    Executes tools and resumes streaming after submit_tool_outputs.
-    Returns final response_id for conversation state.
-    """
     response_id: str | None = None
-    pending: dict[str, dict] = {}   # tool_call_id → {name, args_str, parsed?}
+    pending: dict[str, dict] = {}
     finished: set[str] = set()
 
     for ev in events:
-        typ = getattr(ev, "type", None)
+        evt = getattr(ev, "event", None)   # <-- correct field
 
-        if typ == "response.created":
+        if evt == "response.created":
             response_id = ev.response.id
 
-        elif typ == "response.output_text.delta":
+        elif evt == "response.output_text.delta":
             if ev.delta:
                 q.put(ev.delta)
 
-        elif typ == "response.tool_calls":
+        elif evt == "response.tool_calls":
             for tc in ev.tool_calls or []:
                 pending[tc.id] = {"name": tc.function.name, "args": ""}
 
-        elif typ == "response.tool_calls.arguments.delta":
+        elif evt == "response.tool_calls.arguments.delta":
             tc_id = ev.tool_call_id
             if tc_id in pending:
                 pending[tc_id]["args"] += ev.delta or ""
                 try:
                     pending[tc_id]["parsed"] = json.loads(pending[tc_id]["args"])
                 except json.JSONDecodeError:
-                    pass  # wait for more chunks
+                    pass
 
-        elif typ == "response.tool_calls.done":
+        elif evt == "response.tool_calls.done":
             tool_outputs = []
             for tc in ev.tool_calls or []:
                 if tc.id in finished:
@@ -264,18 +249,17 @@ def _pipe_events(events, q: queue.Queue[str | None]) -> str | None:
                 )
                 response_id = _pipe_events(follow, q) or response_id
 
-        elif typ == "response.done":
+        elif evt == "response.done":
             q.put(None)
             return response_id
 
         else:
-            log.debug("⏺  unhandled event %s", typ)
+            log.debug("⏺  unhandled event %s", evt)
 
     return response_id
 
 
 def sse_generator(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
-    """Convert queue entries to SSE, keep-alive every 20 s."""
     heartbeat_at = time.time() + 20
     while True:
         try:
@@ -325,7 +309,7 @@ def chat_stream():
     )
 
 # ─────────────────────────────────────────────────────────────
-# 6. CSV / CRUD  (unchanged)
+# 6. CSV / CRUD (unchanged)
 # ─────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
