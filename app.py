@@ -95,35 +95,42 @@ def _run_tool(name: str, args: str) -> str:
 # ─────────── replace the whole _pipe() definition with this ───────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
     """
-    Пишем ВСЁ, что видим, в DEBUG-лог: тип события, есть ли delta,
-    buf-состояние. Так проще понять, почему пользователь не получает
-    токены.
+    Потоковый парсер Responses API с подробными INFO-логами
+    и дублирующим print().  Работает как раньше, но шаги видны,
+    даже если LOG_LEVEL оставлен в INFO.
     """
+    log.info("PIPE START -------------------------------")
+    print("PIPE START -------------------------------", flush=True)
+
     resp_id = ""
-    buf: dict[str, dict] = {}        # tc_id → {"name": str, "parts": list[str]}
+    buf: dict[str, dict] = {}     # tool_call_id → {"name": str, "parts": []}
 
     for ev in stream:
         typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
         delta = getattr(ev, "delta", None)
-        log.debug("▶ event=%s  has_delta=%s", typ, bool(delta))
+        log.info("▶ %s   delta=%s", typ, bool(delta))
+        print(f"▶ {typ:35} delta={bool(delta)}", flush=True)
 
-        if getattr(ev, "response", None):         # «created» или другое
+        # remember latest response.id
+        if getattr(ev, "response", None):
             resp_id = ev.response.id
-            log.debug("  response.id = %s", resp_id)
+            log.info("  response.id=%s", resp_id)
 
-        # ── выводим текст — всё, где НЕТ 'arguments' в типе ───────────
+        # ordinary text (no 'arguments' substring)
         if isinstance(delta, str) and "arguments" not in typ:
-            log.debug("  text-token: %s", delta.replace("\n", "\\n")[:80])
+            log.info("  text=%s", delta.replace("\n", "\\n")[:60])
             q.put(delta)
 
-        # ── объявление tool_calls ─────────────────────────────────────
+        # --- new tool_calls header ---
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
-                log.debug("  tool_call declared: id=%s name=%s", tc.id, tc.function.name)
+                log.info("  tool declared: id=%s  name=%s", tc.id, tc.function.name)
+
+                # full JSON immediately present
                 full = getattr(tc.function, "arguments", None)
                 if full:
-                    log.debug("  full JSON already: %s", full)
+                    log.info("  immediate args: %s", full)
                     out = _run_tool(tc.function.name, full)
                     follow = client.responses.submit_tool_outputs(
                         response_id=resp_id,
@@ -132,19 +139,20 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                     )
                     resp_id = _pipe(follow, q)
 
-        # ── приходят кусочки аргументов ──────────────────────────────
+        # streamed argument chunks
         if "arguments.delta" in typ:
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
             if tc_id and tc_id in buf:
                 buf[tc_id]["parts"].append(delta or "")
-                log.debug("  arg-chunk for %s: %s", tc_id, (delta or "")[:60])
+                log.info("  arg-chunk for %s  len=%d",
+                         tc_id, len(buf[tc_id]["parts"]))
 
-        # ── последний кусок аргументов ───────────────────────────────
+        # last chunk
         if typ.endswith("arguments.done"):
             tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
             if tc_id and tc_id in buf:
                 full_json = "".join(buf[tc_id]["parts"])
-                log.debug("  arguments.done id=%s  json=%s", tc_id, full_json)
+                log.info("  args.done id=%s  json=%s", tc_id, full_json)
                 out = _run_tool(buf[tc_id]["name"], full_json)
                 follow = client.responses.submit_tool_outputs(
                     response_id=resp_id,
@@ -154,10 +162,11 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 resp_id = _pipe(follow, q)
                 buf.pop(tc_id, None)
 
-        # ── старая required_action схема ─────────────────────────────
+        # old required_action block
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
-            log.debug("  required_action with %d tool(s)", len(act.submit_tool_outputs.tool_calls))
+            log.info("  required_action with %d tool(s)",
+                     len(act.submit_tool_outputs.tool_calls))
             outs = []
             for tc in act.submit_tool_outputs.tool_calls:
                 outs.append({"tool_call_id": tc.id,
@@ -166,14 +175,15 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 response_id=ev.id, tool_outputs=outs, stream=True)
             resp_id = _pipe(follow, q)
 
-        # ── финал ────────────────────────────────────────────────────
+        # finish markers
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            log.debug("  stream finished: %s", typ)
+            log.info("PIPE FINISH — %s", typ)
+            print("PIPE FINISH ------------------------------", flush=True)
             q.put(None)
             return resp_id
 
-    # если цикл прерван без финального события
-    log.debug("  stream ended without explicit done")
+    log.info("PIPE END without explicit done")
+    print("PIPE END without explicit done", flush=True)
     q.put(None)
     return resp_id
 
