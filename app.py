@@ -178,21 +178,25 @@ def _run_tool(name: str, args: str) -> str:
 
 def _finish_tool(  # noqa: C901
     response_id: str,
-    thread_id: str,
-    run_id: str,
+    thread_id: str | None,           # ← may be None on the first tool call
+    run_id: str | None,              # ← may be None on the first tool call
     tool_call_id: str,
     name: str,
     args_json: str,
     q: queue.Queue[str | None],
 ) -> str:
-    """Call the tool, send its output back to OpenAI, and continue streaming."""
+    """Execute the tool, send its output back to OpenAI, and continue streaming."""
     log.info("RUN tool=%s id=%s args=%s", name, tool_call_id, args_json)
     print(f"DBG | RUN tool={name} id={tool_call_id}")
 
     output = _run_tool(name, args_json)
 
-    # Use Beta endpoint **only** when IDs are present
-    if thread_id and run_id and hasattr(client.beta.threads.runs, "submit_tool_outputs"):
+    # ── 1. Preferred path: Beta threads/runs (SDK ≥ 1.78) ──────────────────
+    if (
+        thread_id
+        and run_id
+        and hasattr(client.beta.threads.runs, "submit_tool_outputs")
+    ):
         follow = client.beta.threads.runs.submit_tool_outputs(
             thread_id=thread_id,
             run_id=run_id,
@@ -201,19 +205,7 @@ def _finish_tool(  # noqa: C901
         )
         return _pipe(follow, q, thread_id, run_id)
 
-    # otherwise fall back to Responses-style submit_tool_outputs  …
-
-    # Preferred path for SDK >= 1.78
-    if hasattr(client.beta.threads.runs, "submit_tool_outputs"):
-        follow = client.beta.threads.runs.submit_tool_outputs(
-            thread_id=thread_id,
-            run_id=run_id,
-            tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
-            stream=True,
-        )
-        return _pipe(follow, q, thread_id, run_id)
-
-    # Fallbacks for older SDKs -------------------------------------------------
+    # ── 2. Fallbacks: Responses API (старые SDK или нет thread_id) ──────────
     if hasattr(client.responses, "actions") and hasattr(
         client.responses.actions, "submit_tool_outputs"
     ):
@@ -221,12 +213,12 @@ def _finish_tool(  # noqa: C901
     elif hasattr(client.responses, "submit_tool_outputs"):
         submit = client.responses.submit_tool_outputs
     else:
-        # Try manual POST to legacy paths
+        # Last-chance manual POST to possible legacy paths
         try:
             from openai.resources.responses import ResponseObject as Cast
         except ImportError:
             try:
-                from openai.resources.responses import Response as Cast  # 1.3–1.4
+                from openai.resources.responses import Response as Cast  # SDK 1.3–1.4
             except ImportError:
                 Cast = dict
 
