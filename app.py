@@ -85,11 +85,8 @@ with app.app_context():
 # 2.  ASSISTANT TOOLS
 # ──────────────────────────────────────────────────────────────────────────────
 def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """
-    Return a short string with the current weather for the location.
-    """
+    """Return a short string with the current weather for the location."""
     try:
-        print(f"[DEBUG] get_current_weather({location=}, {unit=})")
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1},
@@ -113,10 +110,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """
-    Look up an invoice in the database and return a JSON-serialisable dict.
-    """
-    print(f"[DEBUG] get_invoice_by_id({invoice_id=})")
+    """Look up an invoice in the database and return a JSON-serialisable dict."""
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
@@ -166,22 +160,16 @@ TOOLS = [
 # 3.  SHARED HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
-    """
-    Ensure there is an OpenAI thread ID stored in the Flask session.
-    """
+    """Return an OpenAI thread ID stored in session, creating one if missing."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
-        print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
-    else:
-        print(f"[DEBUG] Using existing thread ID: {session['thread_id']}")
     return session["thread_id"]
 
 
 def _safe_add_user_message(tid: str, content: str) -> str:
     """
-    Add a user message to a thread. If the thread is locked by an active run,
-    create a fresh thread, store it in session, add the message there, and
-    return the new thread id.
+    Add user message; if the thread is locked by an active run,
+    create a new thread transparently.
     """
     try:
         client.beta.threads.messages.create(thread_id=tid,
@@ -191,7 +179,6 @@ def _safe_add_user_message(tid: str, content: str) -> str:
     except openai.BadRequestError as exc:
         if "while a run" not in str(exc):
             raise
-        print("[DEBUG] Thread locked, creating new thread", flush=True)
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
         client.beta.threads.messages.create(thread_id=new_tid,
@@ -201,10 +188,7 @@ def _safe_add_user_message(tid: str, content: str) -> str:
 
 
 def _run_tool(c: Any) -> str:
-    """
-    Execute one tool call and return its output string.
-    Robust against bad / empty JSON from partial deltas.
-    """
+    """Execute one tool call and return its output string."""
     try:
         args_raw = getattr(c.function, "arguments", "") or ""
         args = json.loads(args_raw) if args_raw else {}
@@ -220,7 +204,7 @@ def _run_tool(c: Any) -> str:
 
 
 def _arguments_ready(call: Any) -> bool:
-    """Return True if function.arguments contains valid JSON."""
+    """True if call.function.arguments contains valid JSON."""
     try:
         return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
     except Exception:
@@ -228,7 +212,7 @@ def _arguments_ready(call: Any) -> bool:
 
 
 def _tool_call_ready(call: Any) -> bool:
-    """Tool-call is ready when arguments & id are both present."""
+    """Ready when both id and arguments are present."""
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -337,13 +321,10 @@ def chat_sync():
     tid = _safe_add_user_message(tid, user_msg)
 
     run = client.beta.threads.runs.create(
-        thread_id=tid,
-        assistant_id=ASSISTANT_ID,
-        tools=TOOLS,
-        **({"model": MODEL} if MODEL else {}),
+        thread_id=tid, assistant_id=ASSISTANT_ID,
+        tools=TOOLS, **({"model": MODEL} if MODEL else {}),
     )
 
-    # Poll run status until completion or error
     while True:
         status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
         if status.status == "requires_action":
@@ -359,7 +340,6 @@ def chat_sync():
             return jsonify({"error": f"Run {status.status}"}), 500
         time.sleep(0.35)
 
-    # Last assistant message
     msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
     for msg in msgs.data:
         if msg.role == "assistant":
@@ -371,10 +351,7 @@ def chat_sync():
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
                         ) -> tuple[list[Any], str] | None:
-    """
-    Return (tool_calls, run_id) only when each call has id + valid arguments.
-    """
-    # A) step.delta
+    """Return (tool_calls, run_id) only when each call has id + valid args."""
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
@@ -385,28 +362,23 @@ def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
                 all(_tool_call_ready(c) for c in sd.tool_calls):
             return sd.tool_calls, run_id_hint
 
-    # B) step.created / in_progress
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
         tc = step.tool_calls
         if all(_tool_call_ready(c) for c in tc):
             return tc, step.run_id
 
-    # C) requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         tc = ra.submit_tool_outputs.tool_calls
         if all(_tool_call_ready(c) for c in tc):
             return tc, ev.data.id
-
     return None
 
 
 def _follow_stream_after_tools(run_id: str, calls: Sequence[Any],
                                q: queue.Queue, tid: str) -> None:
-    """
-    Execute finished tools, then keep streaming.
-    """
+    """Execute finished tools, then keep streaming."""
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)}
             for c in calls if _tool_call_ready(c)]
     if not outs:
@@ -419,10 +391,7 @@ def _follow_stream_after_tools(run_id: str, calls: Sequence[Any],
 
 def pipe_events(events, q: queue.Queue, tid: str) -> None:
     run_id: str | None = None
-
     for ev in events:
-        print("[EVENT]", ev.event, flush=True)
-
         if ev.event == "thread.run.created":
             run_id = ev.data.id
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
@@ -432,11 +401,9 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
-
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
-
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
@@ -470,14 +437,14 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume() -> None:
-        print("[DEBUG] consume() started", flush=True)
-        first = client.beta.threads.runs.create(
-            thread_id=tid, assistant_id=ASSISTANT_ID,
-            tools=TOOLS, stream=True,
-            **({"model": MODEL} if MODEL else {}),
-        )
-        pipe_events(first, q, tid)
-        print("[DEBUG] consume() finished", flush=True)
+        """Background worker that owns the OpenAI stream."""
+        with app.app_context():  # ensure DB access in background thread
+            first = client.beta.threads.runs.create(
+                thread_id=tid, assistant_id=ASSISTANT_ID,
+                tools=TOOLS, stream=True,
+                **({"model": MODEL} if MODEL else {}),
+            )
+            pipe_events(first, q, tid)
 
     threading.Thread(target=consume, daemon=True).start()
 
@@ -493,5 +460,4 @@ def chat_stream():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    print("[DEBUG] Starting Flask app on 0.0.0.0:5005")
     app.run(host="0.0.0.0", port=5005, debug=True)
