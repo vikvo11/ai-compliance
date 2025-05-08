@@ -371,6 +371,11 @@ class StreamHandler:
         if ev.event == "thread.message.delta":
             self._push_text(ev)
 
+        elif ev.event == "thread.run.step.delta":
+            step = ev.data.delta
+            if step and step.tool_calls:
+                self._submit_tools_and_stream(ev.data.run_id, step.tool_calls)
+
         elif ev.event == "thread.run.requires_action":
             calls = ev.data.required_action.submit_tool_outputs.tool_calls
             self._submit_tools_and_stream(ev.data.id, calls)
