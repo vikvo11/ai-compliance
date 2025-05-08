@@ -92,32 +92,37 @@ def _run_tool(name: str, args: str) -> str:
     fn = DISPATCH.get(name); res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
-# ─── helper: выполнить функцию и стримить дальше ─────────────
+# ─── helper: выполнить функцию и продолжить поток ────────────
 def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
                  q: queue.Queue[str | None]) -> str:
     log.info("RUN tool=%s id=%s args=%s", name, tc_id, args_json)
     out = _run_tool(name, args_json)
 
-    # ==== универсальный submit ==================================
-    if hasattr(client.responses, "actions"):                 # новые SDK (≥1.50)
+    # --- выбираем, какой submit использовать ---
+    if hasattr(client.responses, "actions"):                      # SDK ≥ 1.50
         submit = client.responses.actions.submit_tool_outputs
-    elif hasattr(client.responses, "submit_tool_outputs"):   # старые (≈1.3-1.4)
+
+    elif hasattr(client.responses, "submit_tool_outputs"):        # SDK 1.3-1.4
         submit = client.responses.submit_tool_outputs
-    else:                                                    # совсем старые
+
+    else:                                                         # fallback
+        from openai.resources.responses import Response as OAResp
+
         def submit(response_id, tool_outputs, stream):
             return client.post(
                 f"/v1/responses/{response_id}/actions/submit_tool_outputs",
+                cast_to=OAResp,                   # ← ОБЯЗАТЕЛЬНО
                 body={"tool_outputs": tool_outputs},
                 stream=stream,
             )
-    # ===========================================================
+    # -------------------------------------------
 
     follow = submit(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    return _pipe(follow, q)
+    return _pipe(follow, q)        # рекурсивно продолжаем стрим
 
 
 # ─── основной парсер потока ──────────────────────────────────
