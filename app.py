@@ -186,6 +186,25 @@ def _run_tool(c: Any) -> str:
         return json.dumps(get_invoice_by_id(**args))
     return f"Unknown tool {fn}"
 
+
+def _wait_for_active_run(tid: str, timeout: float = 30.0) -> None:
+    """
+    Block until the last run in the thread is finished or timeout is reached.
+    Raises RuntimeError on timeout.
+    """
+    done = {"completed", "failed", "cancelled", "expired"}
+    runs = client.beta.threads.runs.list(thread_id=tid, limit=1)
+    if not runs.data:  # no runs yet → nothing to wait for
+        return
+
+    run = runs.data[0]
+    end_at = time.time() + timeout
+    while run.status not in done:
+        if time.time() > end_at:
+            raise RuntimeError(f"Previous run '{run.id}' is still active.")
+        time.sleep(0.35)
+        run = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4.  WEB ROUTES  (index / delete / edit / export)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -283,6 +302,13 @@ def chat_sync():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
+
+    # Wait until previous run (if any) is done
+    try:
+        _wait_for_active_run(tid)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 429  # Too Many Requests
+
     client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
     run = client.beta.threads.runs.create(
@@ -314,13 +340,9 @@ def chat_sync():
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6.  STREAMING CHAT  (/chat/stream)
-#     Robust tool-call handling without relying on ev.data.run_id
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any) -> list[Any] | None:
-    """
-    Extract a list of tool_calls from any known event structure.
-    We no longer try to read .run_id here.
-    """
+    """Extract a list of tool_calls from any known event structure."""
     delta = getattr(ev.data, "delta", None)
     if delta and getattr(delta, "tool_calls", None):
         return delta.tool_calls
@@ -358,18 +380,15 @@ def pipe_events(events, q: queue.Queue, tid: str, run_id: str) -> None:
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # Text delta
-        if ev.event == "thread.message.delta":
+        if ev.event == "thread.message.delta":  # text delta
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # Potential tool calls
-        elif (tcs := _extract_tool_calls(ev)) is not None:
+        elif (tcs := _extract_tool_calls(ev)) is not None:  # tool calls
             _follow_stream_after_tools(run_id, tcs, q, tid)
 
-        # End of run
-        elif ev.event == "thread.run.completed":
+        elif ev.event == "thread.run.completed":  # end of run
             q.put(None)
             return
 
@@ -399,8 +418,14 @@ def chat_stream():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
+    # Wait until previous run (if any) is done
+    try:
+        _wait_for_active_run(tid)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 429
+
+    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume():
@@ -412,8 +437,7 @@ def chat_stream():
             stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        # Pass the known run_id explicitly
-        pipe_events(first, q, tid, first.id)
+        pipe_events(first, q, tid, first.id)  # pass known run_id
         print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
