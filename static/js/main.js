@@ -1,489 +1,307 @@
-# app.py
-# -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, new SDK)
-# All comments in English as requested
-from __future__ import annotations
+/* main.js */
+/* Comments in English as requested. -------------------------------------------
+   – Drag-&-drop CSV upload
+   – Invoice editing + toast notifications
+   – Fancy demo animations / crack-glass effect
+   – Light/night theme toggle
+   – Streaming chat (SSE) with:
+       • user bubbles (grey) / assistant bubbles (light-green)
+       • chatBusy flag blocks double-send
+       • animated “…” while GPT thinks
+       • compact ↔ expanded view
+   – FIX: in compact mode the chat-box now has a fixed height (420 px) so the
+          textarea/footer always stays at the bottom.
+------------------------------------------------------------------------------- */
 
-import os
-import sys
-import time
-import json
-import queue
-import threading
-import asyncio
-import functools
-import logging
-from collections.abc import Sequence, Generator
-from typing import Any, Optional
+/* --------------------------------
+   CONSTANTS
+----------------------------------- */
+const COMPACT_HEIGHT = '420px';       // fixed height when folded
+const USE_STREAM     = true;          // switch to `/chat` if false
 
-import httpx                     # faster HTTP client, async-friendly
-from flask import (
-    Flask, render_template, request, redirect,
-    flash, jsonify, session, Response
-)
-from flask_sqlalchemy import SQLAlchemy
-import pandas as pd
-import openai
-import configparser
+/* --------------------------------
+   DRAG-AND-DROP FOR CSV
+----------------------------------- */
+let dragCounter = 0;
+function handleDragOver(e){ e.preventDefault(); }
+function handleDragLeave(e){
+  e.preventDefault(); dragCounter--;
+  if(!dragCounter) document.getElementById('drop-area').style.display = 'none';
+}
+document.addEventListener('dragenter',e=>{
+  e.preventDefault(); dragCounter++;
+  document.getElementById('drop-area').style.display = 'flex';
+});
+function handleDrop(e){
+  e.preventDefault(); dragCounter = 0;
+  document.getElementById('drop-area').style.display = 'none';
+  const f = e.dataTransfer.files;
+  if(f.length && f[0].type === 'text/csv'){
+    const fd = new FormData(); fd.append('csv_file', f[0]);
+    fetch('/', { method:'POST', body:fd })
+      .then(r => { if(!r.ok) throw new Error(); location.reload(); })
+      .catch(() => alert('Upload failed'));
+  }else alert('Please drop a valid CSV file.');
+}
+document.addEventListener('dragover',handleDragOver);
+document.addEventListener('dragleave',handleDragLeave);
+document.addEventListener('drop',handleDrop);
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 0.  LOGGING (ISO-8601 → stdout)
-# ──────────────────────────────────────────────────────────────────────────────
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S%z",
-    force=True,
-)
-log = logging.getLogger("app")
+function toggleInvoices(){
+  const t = document.getElementById('invoiceTable');
+  t.style.display = (t.style.display === 'none') ? 'block' : 'none';
+}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1.  ENV & OPENAI
-# ──────────────────────────────────────────────────────────────────────────────
-cfg = configparser.ConfigParser()
-cfg.read("cfg/openai.cfg")
+/* --------------------------------
+   FADE-IN ON SCROLL
+----------------------------------- */
+document.querySelectorAll('.fade').forEach(el=>{
+  const io = new IntersectionObserver(e=>{
+    if(e[0].isIntersecting){ el.classList.add('show'); io.unobserve(el); }
+  },{threshold:0.3});
+  io.observe(el);
+});
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
-                         fallback=os.getenv("OPENAI_API_KEY"))
-MODEL = (cfg.get("DEFAULT", "model",
-                 fallback=os.getenv("OPENAI_MODEL", "")).strip() or None)
-ASSISTANT_ID = cfg.get("DEFAULT", "assistant_id",
-                       fallback=os.getenv("ASSISTANT_ID", "")).strip()
+/* --------------------------------
+   TOAST
+----------------------------------- */
+function showToast(msg){
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg; c.appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>c.removeChild(t),800); },3000);
+}
 
-if not OPENAI_API_KEY:
-    log.critical("❌  OPENAI_API_KEY is not configured.")
-    sys.exit(1)
-if not ASSISTANT_ID:
-    log.critical("❌  ASSISTANT_ID is not configured.")
-    sys.exit(1)
+/* --------------------------------
+   SAVE INVOICE
+----------------------------------- */
+async function saveInvoice(e,id){
+  e.preventDefault();
+  try{
+    const fd = new FormData(e.target);
+    const r  = await fetch(`/edit/${id}`,{ method:'POST', body:fd });
+    if(!r.ok) throw new Error();
+    const d = await r.json();
+    document.getElementById(`invoice-${id}-client`).textContent    = d.client_name;
+    document.getElementById(`invoice-${id}-invoiceID`).textContent = d.invoice_id;
+    document.getElementById(`invoice-${id}-amount`).textContent    = `$${(+d.amount).toFixed(2)}`;
+    document.getElementById(`invoice-${id}-due`).textContent       = d.date_due;
+    document.getElementById(`invoice-${id}-status`).textContent    = d.status;
+    document.getElementById(`edit-row-${id}`).style.display = 'none';
+    showToast('Invoice updated successfully!');
+  }catch{ showToast('Error updating invoice.'); }
+}
+const toggleEdit=id=>{
+  const row=document.getElementById(`edit-row-${id}`);
+  row.style.display=(row.style.display==='none')?'table-row':'none';
+};
 
-client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
-log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
+/* --------------------------------
+   TYPE EFFECT & TERMINAL DEMOS
+----------------------------------- */
+function typeInto(el,txt,speed=60,cb){
+  let i=0;(function t(){
+    if(i<txt.length){
+      'placeholder'in el ? el.placeholder=txt.slice(0,++i)
+                         : el.value+=txt[i++-1];
+      setTimeout(t,speed);
+    }else cb?.();
+  })();
+}
+function printLines(id,lines,delay=900){
+  const el=document.getElementById(id); let i=0;
+  (function n(){
+    if(i<lines.length){ el.innerHTML+=lines[i++]+'<br>'; setTimeout(n,delay); }
+    else el.innerHTML+='<span class="cursor"></span>';
+  })();
+}
+const onceVisible=(sel,cb)=>{
+  const el=document.querySelector(sel); if(!el) return;
+  const io=new IntersectionObserver(e=>{ if(e[0].isIntersecting){ cb(); io.disconnect(); } },{threshold:0.5});
+  io.observe(el);
+};
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2.  FLASK & DB
-# ──────────────────────────────────────────────────────────────────────────────
-os.makedirs("/app/data", exist_ok=True)
+/* demo triggers */
+onceVisible('#demo',()=>{
+  typeInto(companyField,'Acme Corporation',60,()=>{
+    setTimeout(()=>typeInto(reportField,'Q4 Revenue Report'),300);
+    setTimeout(()=>typeInto(dateField,'31 Jan 2025'),800);
+  });
+  printLines('terminal-main',[
+    '> AI.extractData("report.pdf")',
+    '→ Filling form fields…',
+    '→ Uploading to portal…',
+    '→ Status: ✅ Filed Successfully!'
+  ]);
+});
+onceVisible('#actions',()=>{
+  printLines('term-extract',[
+    '> AI.parse("invoices.zip")',
+    '→ 124 invoices processed',
+    '→ Data normalized ✅'
+  ]);
+  setTimeout(()=>printLines('term-search',[
+    '> AI.vectorSearch("FCC Part 69")',
+    '→ 5 relevant clauses found',
+    '→ Mapping to form fields… ✅'
+  ]),800);
+  setTimeout(()=>printLines('term-submit',[
+    '> AI.RPA.submit("FCC-499A")',
+    '→ Authenticating…',
+    '→ Uploading PDF…',
+    '→ Submission ID: #8842 ✅'
+  ]),1600);
+});
 
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////app/data/data.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-db = SQLAlchemy(app)
+/* --------------------------------
+   CRACK-GLASS ANIMATION
+----------------------------------- */
+function crackGlass(){
+  const block=document.getElementById('ai-extract-block');
+  const cv=document.getElementById('crack-effect'); if(!cv) return;
+  const ctx=cv.getContext('2d'); if(!ctx) return;
 
+  cv.style.display='block'; cv.style.opacity='1'; cv.style.transition='';
+  cv.width=300; cv.height=200; ctx.clearRect(0,0,cv.width,cv.height);
 
-class Client(db.Model):
-    __tablename__ = "client"
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(128), unique=True, nullable=False)
-    email = db.Column(db.String(128))
-    invoices = db.relationship(
-        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
-    )
+  navigator.vibrate?.([100,50,100]);
+  block.classList.add('vibrate'); setTimeout(()=>block.classList.remove('vibrate'),700);
 
+  const [cx,cy]=[cv.width/2,cv.height/2];
+  for(let i=0;i<24;i++){
+    const ang=i*Math.PI*2/24,len=50+Math.random()*100;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(ang)*len,cy+Math.sin(ang)*len);
+    ctx.strokeStyle=`rgba(100,100,100,${0.5+Math.random()*0.5})`; ctx.lineWidth=0.5+Math.random()*2; ctx.stroke();
+  }
+  for(let r=20;r<=100;r+=20){
+    ctx.beginPath(); ctx.arc(cx,cy,r+Math.random()*5,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(120,120,120,${Math.random()*0.4+0.3})`; ctx.lineWidth=0.3+Math.random(); ctx.stroke();
+  }
+  setTimeout(()=>{ cv.style.transition='opacity .8s'; cv.style.opacity='0';
+    setTimeout(()=>{ cv.style.display='none'; cv.style.transition=''; },800);
+  },1300);
+}
 
-class Invoice(db.Model):
-    __tablename__ = "invoice"
-    id = db.Column(db.Integer, primary_key=True)
-    invoice_id = db.Column(db.String(64), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    date_due = db.Column(db.String(64), nullable=False)
-    status = db.Column(db.String(32), nullable=False)
-    client_id = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
+/* --------------------------------
+   DOM-READY SETUP
+----------------------------------- */
+document.addEventListener('DOMContentLoaded',()=>{
+  chatBox.style.display='none';
+  chatBox.style.width='340px';
+  chatBox.style.height=COMPACT_HEIGHT;                   // fixed height
+  chatBox.querySelector('.messages').style.maxHeight='300px';
 
-
-with app.app_context():
-    db.create_all()
-log.info("DB ready")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS (cached + async)
-# ──────────────────────────────────────────────────────────────────────────────
-HTTP_TIMEOUT = httpx.Timeout(6.0)
-
-
-@functools.lru_cache(maxsize=2048)
-def _coords_for(city: str) -> tuple[float, float] | None:
-    t0 = time.perf_counter()
-    resp = httpx.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": city, "count": 1},
-        timeout=HTTP_TIMEOUT,
-    )
-    res = resp.json().get("results")
-    log.debug("geocode '%s' %.3f s", city, time.perf_counter() - t0)
-    return None if not res else (res[0]["latitude"], res[0]["longitude"])
-
-
-async def _weather_for(lat: float, lon: float) -> dict:
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
-        t0 = time.perf_counter()
-        resp = await ac.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
-        )
-    log.debug("weather API %.3f s", time.perf_counter() - t0)
-    return resp.json().get("current_weather", {})
-
-
-def get_current_weather(location: str, unit: str = "celsius") -> str:
-    t0 = time.perf_counter()
-    try:
-        coord = _coords_for(location)
-        if not coord:
-            return f"Location '{location}' not found."
-        cw = asyncio.run(_weather_for(*coord))
-        return (
-            f"The temperature in {location} is {cw.get('temperature')} °C "
-            f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
-        )
-    finally:
-        log.info("tool:get_current_weather('%s') %.3f s", location, time.perf_counter() - t0)
-
-
-def get_invoice_by_id(invoice_id: str) -> dict:
-    t0 = time.perf_counter()
-    inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    log.info("tool:get_invoice_by_id '%s' DB %.3f s", invoice_id, time.perf_counter() - t0)
-    if not inv:
-        return {"error": f"Invoice {invoice_id} not found"}
-    return {
-        "invoice_id": inv.invoice_id,
-        "amount": inv.amount,
-        "date_due": inv.date_due,
-        "status": inv.status,
-        "client_name": inv.client.name,
-        "client_email": inv.client.email,
+  document.getElementById('expand-chat')?.addEventListener('click',()=>{
+    if(chatBox.style.width==='600px'){                   /* collapse */
+      chatBox.style.width='340px';
+      chatBox.style.height=COMPACT_HEIGHT;
+      chatBox.querySelector('.messages').style.maxHeight='300px';
+    }else{                                               /* expand */
+      chatBox.style.display='flex'; chatBox.style.flexDirection='column';
+      chatBox.style.width='600px'; chatBox.style.height='80vh';
+      chatBox.querySelector('.messages').style.maxHeight='';
     }
+  });
+  document.getElementById('ai-extract-block')?.addEventListener('click',crackGlass);
+});
 
+/* --------------------------------
+   CHAT
+----------------------------------- */
+const launcher  = document.getElementById('chat-launcher');
+const chatBox   = document.getElementById('chat-box');
+const chatInput = chatBox.querySelector('textarea');
+const sendBtn   = chatBox.querySelector('button.send');
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_current_weather",
-            "description": "Get current weather for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"},
-                    "unit": {"type": "string", "default": "celsius"},
-                },
-                "required": ["location"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_invoice_by_id",
-            "description": "Return invoice data by invoice_id",
-            "parameters": {
-                "type": "object",
-                "properties": {"invoice_id": {"type": "string"}},
-                "required": ["invoice_id"],
-            },
-        },
-    },
-]
+let chatBusy=false;
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 4.  HELPERS
-# ──────────────────────────────────────────────────────────────────────────────
-def ensure_thread() -> str:
-    if "thread_id" not in session:
-        session["thread_id"] = client.beta.threads.create().id
-        log.debug("new thread %s", session["thread_id"])
-    return session["thread_id"]
+function addMessage(txt, cls='message'){
+  const d=document.createElement('div');
+  d.className=cls; d.textContent=txt;
+  const pane=chatBox.querySelector('.messages');
+  pane.appendChild(d); pane.scrollTop=pane.scrollHeight;
+  return d;
+}
 
+launcher.addEventListener('click',()=>{
+  if(chatBox.style.display==='flex'){ chatBox.style.display='none'; return; }
+  chatBox.style.display='flex'; chatBox.style.flexDirection='column';
+  chatInput.disabled=false; sendBtn.disabled=false; chatInput.focus();
+});
 
-def _safe_add_user_message(tid: str, content: str) -> str:
-    try:
-        client.beta.threads.messages.create(thread_id=tid, role="user", content=content)
-        return tid
-    except openai.BadRequestError as exc:
-        if "while a run" not in str(exc):
-            raise
-        new_tid = client.beta.threads.create().id
-        session["thread_id"] = new_tid
-        client.beta.threads.messages.create(thread_id=new_tid, role="user", content=content)
-        log.warning("thread %s locked → new %s", tid, new_tid)
-        return new_tid
+/* ellipsis anim */
+const startDots=el=>{
+  let dots=1; el.textContent='.'; el._timer=setInterval(()=>{ dots=(dots%3)+1; el.textContent='.'.repeat(dots); },400);
+};
+const stopDots =el=>{ clearInterval(el._timer); delete el._timer; };
 
+/* send */
+async function sendMessage(){
+  const msg=chatInput.value.trim();
+  if(!msg || chatBusy) return;
 
-def _run_tool(c: Any) -> str:
-    try:
-        args = json.loads(c.function.arguments or "{}")
-    except json.JSONDecodeError as exc:
-        return f"Invalid JSON: {exc}"
+  chatBusy=true; chatInput.disabled=true; sendBtn.disabled=true;
 
-    fn = c.function.name
-    t0 = time.perf_counter()
-    log.info("▶ tool %s %s", fn, args)
-    try:
-        if fn == "get_current_weather":
-            return get_current_weather(**args)
-        if fn == "get_invoice_by_id":
-            return json.dumps(get_invoice_by_id(**args))
-        return f"Unknown tool {fn}"
-    finally:
-        log.info("▲ tool %s done %.3f s", fn, time.perf_counter() - t0)
+  addMessage(msg,'message user');
+  chatInput.value='';
 
+  const aiDiv=addMessage('', 'message assistant typing');
+  startDots(aiDiv);
 
-def _arguments_ready(call: Any) -> bool:
-    try:
-        return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
-    except Exception:
-        return False
+  const push=chunk=>{
+    if(aiDiv.classList.contains('typing')){
+      stopDots(aiDiv); aiDiv.textContent=''; aiDiv.classList.remove('typing');
+    }
+    aiDiv.textContent+=chunk;
+    chatBox.querySelector('.messages').scrollTop=chatBox.querySelector('.messages').scrollHeight;
+  };
 
-
-def _tool_call_ready(call: Any) -> bool:
-    return bool(getattr(call, "id", None)) and _arguments_ready(call)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (detailed timing + metrics summary)
-# ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
-    delta = getattr(ev.data, "delta", None)
-    if delta:
-        tc = getattr(delta, "tool_calls", None)
-        if tc and run_id_hint and all(_tool_call_ready(c) for c in tc):
-            return tc, run_id_hint
-        sd = getattr(delta, "step_details", None)
-        if sd and getattr(sd, "tool_calls", None) and run_id_hint and \
-                all(_tool_call_ready(c) for c in sd.tool_calls):
-            return sd.tool_calls, run_id_hint
-
-    step = getattr(ev.data, "step", None)
-    if step and getattr(step, "tool_calls", None):
-        tc = step.tool_calls
-        if all(_tool_call_ready(c) for c in tc):
-            return tc, step.run_id
-
-    ra = getattr(ev.data, "required_action", None)
-    if ra and getattr(ra, "submit_tool_outputs", None):
-        tc = ra.submit_tool_outputs.tool_calls
-        if all(_tool_call_ready(c) for c in tc):
-            return tc, ev.data.id
-    return None
-
-
-def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
-    outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls if _tool_call_ready(c)]
-    if not outs:
-        return
-    follow = client.beta.threads.runs.submit_tool_outputs(
-        thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
-    )
-    pipe_events(follow, q, tid)
-
-
-def pipe_events(events, q: queue.Queue, tid: str):
-    """Forward streamed events to the SSE queue + collect timing metrics."""
-    run_id: str | None = None
-    t0 = time.perf_counter()
-    run_created_at: float | None = None
-    first_tok: float | None = None
-    done_at: float | None = None
-    n_frag = 0
-
-    for ev in events:
-        if ev.event == "thread.run.created":
-            run_id = ev.data.id
-            run_created_at = time.perf_counter()
-            log.info("run %s created", run_id)
-        elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
-            run_id = ev.data.run_id
-
-        if ev.event == "thread.message.delta":
-            for part in ev.data.delta.content or []:
-                if part.type == "text":
-                    if first_tok is None:
-                        first_tok = time.perf_counter()
-                        log.info(
-                            "run %s first-token %.3f s",
-                            run_id, first_tok - (run_created_at or t0)
-                        )
-                    n_frag += 1
-                    q.put(part.text.value)
-
-        elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
-            tool_calls, run_id = tc_block
-            _follow_stream_after_tools(run_id, tool_calls, q, tid)
-
-        elif ev.event == "thread.run.completed":
-            done_at = time.perf_counter()
-            log.info(
-                "run %s done (%d frags, %.3f s total)",
-                run_id, n_frag, done_at - t0
-            )
-            q.put(None)
-            break
-
-    # After the loop: build & log metrics summary
-    if run_created_at and done_at:
-        metrics = {
-            "queue_to_run_created": f"{run_created_at - t0:.3f}s",
-            "run_created_to_first_token": (
-                f"{first_tok - run_created_at:.3f}s" if first_tok else "n/a"
-            ),
-            "first_token_to_done": (
-                f"{done_at - first_tok:.3f}s" if first_tok else "n/a"
-            ),
-            "overall": f"{done_at - t0:.3f}s",
-            "fragments": n_frag,
+  try{
+    if(USE_STREAM){
+      const res=await fetch('/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
+      if(!res.ok || !res.body) throw new Error('Network error');
+      const rdr=res.body.getReader(), dec=new TextDecoder(); let buf='';
+      while(true){
+        const {value,done}=await rdr.read(); if(done) break;
+        buf+=dec.decode(value,{stream:true});
+        const parts=buf.split('\n\n'); buf=parts.pop();
+        for(const p of parts){
+          if(p.startsWith('event: done')){ rdr.cancel(); break; }
+          const l=p.split('\n').find(x=>x.startsWith('data:'));
+          if(l) push(l.slice(6));
         }
-        log.info("timing-summary %s %s", run_id, json.dumps(metrics, ensure_ascii=False))
+      }
+    }else{
+      const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
+      const d=await res.json();
+      stopDots(aiDiv); aiDiv.textContent=d.response||d.error||'No response';
+    }
+  }catch(err){
+    console.error(err); stopDots(aiDiv); aiDiv.textContent='Error contacting server';
+  }finally{
+    chatBusy=false; chatInput.disabled=false; sendBtn.disabled=false;
+    aiDiv.classList.remove('typing'); chatInput.focus();
+  }
+}
 
+sendBtn.addEventListener('click',sendMessage);
+chatInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+});
 
-def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
-    heartbeat_at = time.time() + 20
-    while True:
-        try:
-            tok = q.get(timeout=1)
-            if tok is None:
-                yield b"event: done\ndata: [DONE]\n\n"
-                break
-            yield f"data: {tok}\n\n".encode()
-            heartbeat_at = time.time() + 20
-        except queue.Empty:
-            if time.time() > heartbeat_at:
-                yield b": keep-alive\n\n"
-                heartbeat_at = time.time() + 20
-
-
-@app.route("/chat/stream", methods=["POST"])
-def chat_stream():
-    user_msg = (request.json or {}).get("message", "").strip()
-    if not user_msg:
-        return jsonify({"error": "Empty message"}), 400
-
-    tid = ensure_thread()
-    tid = _safe_add_user_message(tid, user_msg)
-    overall_t0 = time.perf_counter()
-
-    q: queue.Queue[str | None] = queue.Queue()
-
-    def consume() -> None:
-        with app.app_context():
-            first = client.beta.threads.runs.create(
-                thread_id=tid, assistant_id=ASSISTANT_ID,
-                tools=TOOLS, stream=True,
-                **({"model": MODEL} if MODEL else {}),
-            )
-            pipe_events(first, q, tid)
-        log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
-
-    threading.Thread(target=consume, daemon=True).start()
-    return Response(
-        sse_generator(q),
-        mimetype="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 6.  CSV / CRUD  (with logs)
-# ──────────────────────────────────────────────────────────────────────────────
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        f = request.files.get("csv_file")
-        if not f or not f.filename.endswith(".csv"):
-            flash("Please upload a valid CSV file.")
-            return redirect(request.url)
-
-        t0 = time.perf_counter()
-        df = pd.read_csv(f)
-        new_clients: dict[str, Client] = {}
-        invoices: list[Invoice] = []
-        for _, row in df.iterrows():
-            name = row["client_name"]
-            cl = Client.query.filter_by(name=name).first() or new_clients.get(name)
-            if not cl:
-                cl = Client(name=name, email=row.get("client_email") or "")
-                new_clients[name] = cl
-            invoices.append(
-                Invoice(
-                    invoice_id=row["invoice_id"],
-                    amount=row["amount"],
-                    date_due=row["date_due"],
-                    status=row["status"],
-                    client=cl,
-                )
-            )
-        db.session.add_all(new_clients.values())
-        db.session.add_all(invoices)
-        db.session.commit()
-        log.info("CSV import %d invoices, %d new clients %.3f s",
-                 len(invoices), len(new_clients), time.perf_counter() - t0)
-        flash("Invoices uploaded successfully.")
-        return redirect("/")
-    return render_template("index.html", invoices=Invoice.query.all())
-
-
-@app.route("/edit/<int:invoice_id>", methods=["POST"])
-def edit_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
-    inv.amount = request.form["amount"]
-    inv.date_due = request.form["date_due"]
-    inv.status = request.form["status"]
-    inv.client.email = request.form["client_email"]
-    db.session.commit()
-    log.info("invoice %d updated", invoice_id)
-    return jsonify(
-        {
-            "client_name": inv.client.name,
-            "invoice_id": inv.invoice_id,
-            "amount": inv.amount,
-            "date_due": inv.date_due,
-            "status": inv.status,
-        }
-    )
-
-
-@app.route("/delete/<int:invoice_id>", methods=["POST"])
-def delete_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(inv)
-    db.session.commit()
-    log.info("invoice %d deleted", invoice_id)
-    flash("Invoice deleted.")
-    return redirect("/")
-
-
-@app.route("/export")
-@app.route("/export/<int:invoice_id>")
-def export_invoice(invoice_id: int | None = None):
-    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
-    csv_data = pd.DataFrame(
-        [
-            {
-                "client_name": r.client.name,
-                "client_email": r.client.email,
-                "invoice_id": r.invoice_id,
-                "amount": r.amount,
-                "date_due": r.date_due,
-                "status": r.status,
-            }
-            for r in rows
-        ]
-    ).to_csv(index=False)
-
-    fname = f"invoice_{invoice_id or 'all'}.csv"
-    log.info("export %s", fname)
-    return (
-        csv_data,
-        200,
-        {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename="{fname}"'},
-    )
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 7.  ENTRY POINT
-# ──────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
-    log.info("Flask serving on 0.0.0.0:5005  (log-level=%s)", LOG_LEVEL)
-    app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
+/* --------------------------------
+   AUTO THEME
+----------------------------------- */
+(()=>{
+  const hr=new Date().getHours();
+  if(hr>=19||hr<6){
+    document.body.classList.add('night-theme');
+    document.getElementById('star-background')?.style.setProperty('display','block');
+  }
+})();
+document.getElementById('theme-toggle')?.addEventListener('click',()=>{
+  const body=document.body, stars=document.getElementById('star-background');
+  const night=body.classList.toggle('night-theme');
+  stars && (stars.style.display = night ? 'block' : 'none');
+  localStorage.setItem('theme', night ? 'night' : 'light');
+});
