@@ -15,9 +15,9 @@ from collections.abc import Generator, Sequence
 from typing import Any, Optional
 
 import configparser
-import requests
 import openai
 import pandas as pd
+import requests
 from flask import (
     Flask,
     Response,
@@ -36,18 +36,14 @@ from flask_sqlalchemy import SQLAlchemy
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
-                         fallback=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
 MODEL: Optional[str] = (
     cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
 )
-ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id",
-                            fallback=os.getenv("ASSISTANT_ID", "")).strip()
+ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
-if not OPENAI_API_KEY:
-    sys.exit("❌  OPENAI_API_KEY is not configured.")
-if not ASSISTANT_ID:
-    sys.exit("❌  ASSISTANT_ID is not configured.")
+if not OPENAI_API_KEY or not ASSISTANT_ID:
+    sys.exit("❌  OPENAI_API_KEY / ASSISTANT_ID is not configured.")
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
@@ -68,12 +64,7 @@ class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128))
-    invoices = db.relationship(
-        "Invoice",
-        backref="client",
-        lazy=True,
-        cascade="all, delete-orphan",
-    )
+    invoices = db.relationship("Invoice", backref="client", lazy=True, cascade="all, delete-orphan")
 
 
 class Invoice(db.Model):
@@ -117,7 +108,6 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """Look up an invoice in the database and return a JSON-serialisable dict."""
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
@@ -167,14 +157,12 @@ TOOLS = [
 # 3.  SHARED HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
-    """Return a thread ID stored in the Flask session, creating one if needed."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
     return session["thread_id"]
 
 
 def _run_tool(c: Any) -> str:
-    """Execute one tool call and return its output string."""
     args = json.loads(c.function.arguments)
     fn = c.function.name
     if fn == "get_current_weather":
@@ -185,7 +173,6 @@ def _run_tool(c: Any) -> str:
 
 
 def _wait_until_no_active_runs(tid: str, timeout: float = 60.0) -> None:
-    """Block until the thread has no active runs."""
     done = {"completed", "failed", "cancelled", "expired"}
     end_at = time.time() + timeout
     while True:
@@ -212,8 +199,7 @@ def index():
         for _, row in df.iterrows():
             cl = Client.query.filter_by(name=row["client_name"]).first()
             if not cl:
-                cl = Client(name=row["client_name"],
-                            email=row.get("client_email") or "")
+                cl = Client(name=row["client_name"], email=row.get("client_email") or "")
                 db.session.add(cl)
                 db.session.flush()
             db.session.add(
@@ -345,9 +331,7 @@ def _extract_tool_calls(ev: Any) -> list[Any] | None:
     return None
 
 
-def _follow_stream_after_tools(
-    run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str
-) -> None:
+def _follow_stream_after_tools(run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str) -> None:
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
@@ -409,8 +393,7 @@ def chat_stream():
             tools=TOOLS,
             **({"model": MODEL} if MODEL else {}),
         )
-        # NEW SDK: streaming via .stream(...)
-        events = client.beta.threads.runs.stream(thread_id=tid, run_id=run.id)
+        events = client.beta.threads.runs.stream(tid, run.id)  # ← positional args
         pipe_events(events, q, tid, run.id)
 
     threading.Thread(target=consume, daemon=True).start()
@@ -427,5 +410,4 @@ def chat_stream():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    print("[DEBUG] Starting Flask app on 0.0.0.0:5005")
     app.run(host="0.0.0.0", port=5005, debug=True)
