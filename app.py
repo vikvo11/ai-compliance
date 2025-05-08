@@ -58,6 +58,7 @@ if not ASSISTANT_ID:
     log.critical("❌  ASSISTANT_ID is not configured.")
     sys.exit(1)
 
+# one global OpenAI client → keep-alive re-use
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
 
@@ -98,18 +99,21 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS (cached + async)
+# 3.  ASSISTANT TOOLS (cached + async, connection-reuse)
 # ──────────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
+
+# global keep-alive clients ✔
+sync_client = httpx.Client(timeout=HTTP_TIMEOUT)
+async_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
 
 
 @functools.lru_cache(maxsize=2048)
 def _coords_for(city: str) -> tuple[float, float] | None:
     t0 = time.perf_counter()
-    resp = httpx.get(
+    resp = sync_client.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": city, "count": 1},
-        timeout=HTTP_TIMEOUT,
     )
     res = resp.json().get("results")
     log.debug("geocode '%s' %.3f s", city, time.perf_counter() - t0)
@@ -117,12 +121,11 @@ def _coords_for(city: str) -> tuple[float, float] | None:
 
 
 async def _weather_for(lat: float, lon: float) -> dict:
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
-        t0 = time.perf_counter()
-        resp = await ac.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
-        )
+    t0 = time.perf_counter()
+    resp = await async_client.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={"latitude": lat, "longitude": lon, "current_weather": True},
+    )
     log.debug("weather API %.3f s", time.perf_counter() - t0)
     return resp.json().get("current_weather", {})
 
@@ -242,7 +245,7 @@ def _tool_call_ready(call: Any) -> bool:
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (detailed timing + metrics summary)
+# 5.  STREAMING CHAT  (token batching + metrics)
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
@@ -279,14 +282,25 @@ def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
     pipe_events(follow, q, tid)
 
 
+def _flush_buf(buf: list[str], q: queue.Queue):
+    """Send accumulated text to the SSE queue."""
+    if buf:
+        q.put("".join(buf))
+        buf.clear()
+
+
 def pipe_events(events, q: queue.Queue, tid: str):
-    """Forward streamed events to the SSE queue + collect timing metrics."""
+    """Forward streamed events to the SSE queue with batching + collect timing metrics."""
     run_id: str | None = None
     t0 = time.perf_counter()
     run_created_at: float | None = None
     first_tok: float | None = None
     done_at: float | None = None
     n_frag = 0
+
+    # batching
+    tok_buf: list[str] = []
+    next_flush = time.perf_counter() + 0.05      # flush every 50 ms
 
     for ev in events:
         if ev.event == "thread.run.created":
@@ -306,7 +320,11 @@ def pipe_events(events, q: queue.Queue, tid: str):
                             run_id, first_tok - (run_created_at or t0)
                         )
                     n_frag += 1
-                    q.put(part.text.value)
+                    tok_buf.append(part.text.value)
+                    # flush policy
+                    if len(tok_buf) >= 25 or time.perf_counter() >= next_flush:
+                        _flush_buf(tok_buf, q)
+                        next_flush = time.perf_counter() + 0.05
 
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
@@ -314,6 +332,7 @@ def pipe_events(events, q: queue.Queue, tid: str):
 
         elif ev.event == "thread.run.completed":
             done_at = time.perf_counter()
+            _flush_buf(tok_buf, q)       # send leftovers
             log.info(
                 "run %s done (%d frags, %.3f s total)",
                 run_id, n_frag, done_at - t0
@@ -321,7 +340,7 @@ def pipe_events(events, q: queue.Queue, tid: str):
             q.put(None)
             break
 
-    # After the loop: build & log metrics summary
+    # After the loop: log summary
     if run_created_at and done_at:
         metrics = {
             "queue_to_run_created": f"{run_created_at - t0:.3f}s",
@@ -383,7 +402,7 @@ def chat_stream():
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  CSV / CRUD  (with logs)
+# 6.  CSV / CRUD  (unchanged except comments)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
