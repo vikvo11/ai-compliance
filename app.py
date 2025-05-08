@@ -176,10 +176,10 @@ def _run_tool(name: str, args: str) -> str:
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
 
-def _finish_tool(  # noqa: C901
+def _finish_tool(
     response_id: str,
-    thread_id: str | None,           # ← may be None on the first tool call
-    run_id: str | None,              # ← may be None on the first tool call
+    thread_id: str | None,
+    run_id: str | None,
     tool_call_id: str,
     name: str,
     args_json: str,
@@ -191,12 +191,15 @@ def _finish_tool(  # noqa: C901
 
     output = _run_tool(name, args_json)
 
-    # ── 1. Preferred path: Beta threads/runs (SDK ≥ 1.78) ──────────────────
-    if (
-        thread_id
-        and run_id
-        and hasattr(client.beta.threads.runs, "submit_tool_outputs")
-    ):
+    # ── 1. Make sure we have thread_id / run_id ────────────────────────────
+    if (not thread_id or not run_id) and hasattr(client.responses, "retrieve"):
+        info = client.responses.retrieve(response_id)
+        thread_id = thread_id or getattr(info, "thread_id", None)
+        run_id    = run_id    or getattr(info, "run_id", None)
+        print(f"DBG |   retrieved IDs  thread_id={thread_id}  run_id={run_id}")
+
+    # ── 2. Submit tool outputs via Beta endpoint (SDK ≥ 1.78) ──────────────
+    if thread_id and run_id and hasattr(client.beta.threads.runs, "submit_tool_outputs"):
         follow = client.beta.threads.runs.submit_tool_outputs(
             thread_id=thread_id,
             run_id=run_id,
@@ -205,51 +208,11 @@ def _finish_tool(  # noqa: C901
         )
         return _pipe(follow, q, thread_id, run_id)
 
-    # ── 2. Fallbacks: Responses API (старые SDK или нет thread_id) ──────────
-    if hasattr(client.responses, "actions") and hasattr(
-        client.responses.actions, "submit_tool_outputs"
-    ):
-        submit = client.responses.actions.submit_tool_outputs
-    elif hasattr(client.responses, "submit_tool_outputs"):
-        submit = client.responses.submit_tool_outputs
-    else:
-        # Last-chance manual POST to possible legacy paths
-        try:
-            from openai.resources.responses import ResponseObject as Cast
-        except ImportError:
-            try:
-                from openai.resources.responses import Response as Cast  # SDK 1.3–1.4
-            except ImportError:
-                Cast = dict
-
-        _CANDIDATES = [
-            "responses/{id}/actions/submit_tool_outputs",
-            "responses/{id}/submit_tool_outputs",
-            "responses/{id}/tool_outputs",
-        ]
-
-        def submit(response_id, tool_outputs, stream):  # type: ignore
-            last_err = None
-            for tmpl in _CANDIDATES:
-                path = tmpl.format(id=response_id)
-                try:
-                    print(f"DBG |   try POST {path}")
-                    return client.post(
-                        path,
-                        body={"tool_outputs": tool_outputs},
-                        stream=stream,
-                        cast_to=Cast,
-                    )
-                except NotFoundError as e:
-                    last_err = e
-            raise last_err
-
-    follow = submit(
-        response_id=response_id,
-        tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
-        stream=True,
-    )
-    return _pipe(follow, q, thread_id, run_id)
+    # ── 3. Last-chance guard: if IDs всё равно нет — логируем и отказываем ─
+    log.error("Cannot submit tool outputs: thread_id or run_id still None")
+    q.put(f"\n[internal error: missing thread/run IDs]\n")
+    q.put(None)
+    return response_id
 
 
 def _pipe(  # noqa: C901
