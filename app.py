@@ -149,72 +149,98 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
     )
     return _pipe(follow, q)
 
-# ─────────────────── helpers ─────────────────────────────────
-def _submit_tool(thread_id: str, run_id: str, tc_id: str,
-                 name: str, args_json: str,
-                 q: queue.Queue[str | None]) -> str:
-    print(f"DBG | RUN tool={name} id={tc_id} args={args_json}")
-    out = _run_tool(name, args_json)
-    follow = client.beta.threads.runs.submit_tool_outputs(
-        thread_id=thread_id,
-        run_id=run_id,
-        tool_outputs=[{"tool_call_id": tc_id, "output": out}],
-        stream=True,
-    )
-    return _pipe(thread_id, follow, q)
-
 
 # ─── основной парсер потока ──────────────────────────────────
-def _pipe(thread_id: str, events, q: queue.Queue[str | None]) -> str:
-    """Stream Runs-events, исполняет tools, продолжает поток."""
-    print("DBG | PIPE START")
-    run_id = ""
-    pending: dict[str, dict] = {}        # tc_id → {"name": str, "parts": []}
+def _pipe(stream, q: queue.Queue[str | None]) -> str:
+    """
+    Stream-парсер Responses-API c явными print-отладками.
+    INFO-лог остаётся, но дублируем всё в stdout, чтобы видеть
+    даже при скромных настройках логгера / Docker-redirect.
+    """
+    print("DBG | PIPE START")                  # ← начало потока
+    resp_id = ""
+    buf: dict[str, dict] = {}                  # id → {"name": str, "parts": []}
 
-    for ev in events:
+    for ev in stream:
         typ   = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
         delta = getattr(ev, "delta", None)
+        log.info("▶ %s   delta=%s", typ, bool(delta))
+        print(f"DBG | ▶ {typ:40} delta={bool(delta)}")
 
-        if getattr(ev, "run", None):
-            run_id = ev.run.id
-        elif getattr(ev, "step", None):
-            run_id = ev.step.run_id
+        if getattr(ev, "response", None):
+            resp_id = ev.response.id
+            print(f"DBG |   response.id = {resp_id}")
 
-        # текст
+        # текстовые токены
         if isinstance(delta, str) and "arguments" not in typ:
+            print(f"DBG |   text: {delta[:70].replace(chr(10),'⏎')}")
             q.put(delta)
 
-        # объявлены tool_calls целиком
+        # ── старая schema: response.tool_calls ───────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
-                pending[tc.id] = {"name": tc.function.name, "parts": []}
+                buf[tc.id] = {"name": tc.function.name, "parts": []}
+                print(f"DBG |   tool_call id={tc.id} name={tc.function.name}")
                 full = getattr(tc.function, "arguments", None)
                 if full:
-                    run_id = _submit_tool(thread_id, run_id, tc.id,
-                                          tc.function.name, full, q)
+                    print("DBG |   immediate JSON args")
+                    resp_id = _finish_tool(resp_id, tc.id, tc.function.name, full, q)
 
-        # поток аргументов
+        # ── новая schema: output_item.added ──────────────────
+        if typ == "response.output_item.added":
+            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
+                       or ev.model_dump(exclude_none=True).get("item")
+            item = item_obj if isinstance(item_obj, dict) else \
+                   item_obj.model_dump(exclude_none=True)
+            if item and item.get("type") in ("function_call", "tool_call"):
+                iid = item["id"]
+                fname = (
+                    item.get("function", {}).get("name")
+                    or item.get("tool_call", {}).get("name")
+                    or item.get("name")
+                )
+                if fname:
+                    buf[iid] = {"name": fname, "parts": []}
+                    print(f"DBG |   declare id={iid} func={fname}")
+
+        # аргумент-дельты
         if "arguments.delta" in typ:
-            tc_id = getattr(ev, "tool_call_id", None)
-            if tc_id and tc_id in pending:
-                pending[tc_id]["parts"].append(delta or "")
+            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
+                  or getattr(ev, "tool_call_id", None)
+            if iid and iid in buf:
+                buf[iid]["parts"].append(delta or "")
+                print(f"DBG |   arg-chunk for {iid}  len={len(buf[iid]['parts'])}")
 
-        # arguments.done
+        # окончание аргументов
         if typ.endswith("arguments.done"):
-            tc_id = getattr(ev, "tool_call_id", None)
-            if tc_id and tc_id in pending:
-                full = "".join(pending[tc_id]["parts"])
-                run_id = _submit_tool(thread_id, run_id, tc_id,
-                                      pending[tc_id]["name"], full, q)
-                pending.pop(tc_id, None)
+            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
+                  or getattr(ev, "tool_call_id", None)
+            if iid and iid in buf:
+                full_json = "".join(buf[iid]["parts"])
+                print(f"DBG |   args.done id={iid}  json={full_json}")
+                resp_id = _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
+                buf.pop(iid, None)
 
-        # конец потока
-        if typ == "thread.run.completed":
+        # required_action (старый fallback)
+        act = getattr(ev, "required_action", None)
+        if act and getattr(act, "submit_tool_outputs", None):
+            print("DBG |   required_action submit_tool_outputs")
+            outs = [{"tool_call_id": tc.id,
+                     "output": _run_tool(tc.name, tc.args)}
+                    for tc in act.submit_tool_outputs.tool_calls]
+            follow = client.responses.submit_tool_outputs(
+                response_id=ev.id, tool_outputs=outs, stream=True)
+            resp_id = _pipe(follow, q)
+
+        # финальные маркеры
+        if typ in ("response.done", "response.completed", "response.output_text.done"):
+            print(f"DBG | PIPE FINISH — {typ}")
             q.put(None)
-            return run_id
+            return resp_id
 
+    print("DBG | PIPE END without explicit done")
     q.put(None)
-    return run_id
+    return resp_id
     
 # ─────────────────── 5. SSE ──────────────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
