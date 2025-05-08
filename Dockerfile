@@ -8,19 +8,19 @@ FROM --platform=linux/amd64 python:3.11-slim AS build
 
 WORKDIR /wheels
 
-# Copy only the requirements first to maximise cache-hits
+# Copy only the requirements first to maximise cache hits
 COPY requirements.txt .
 
 # Build wheels for every dependency; nothing is installed yet
-# English comments as requested
 RUN pip wheel --no-cache-dir -r requirements.txt
+
 
 ######################################################################
 # ----------------- Stage 2 — runtime image ------------------------ #
 ######################################################################
 FROM --platform=linux/amd64 python:3.11-slim
 
-# Disable .pyc creation and output buffering
+# Disable .pyc creation and enable unbuffered stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -41,5 +41,5 @@ RUN mkdir -p /app/data
 
 EXPOSE 5005
 
-# Production entry point (swap for `CMD ["python", "app.py"]` if desired)
-CMD ["gunicorn", "--bind", "0.0.0.0:5005", "app:app"]
+# Development/stand-alone entry point
+CMD ["python", "app.py"]
