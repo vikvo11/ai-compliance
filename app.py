@@ -27,7 +27,7 @@ import openai
 import configparser
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 0. LOGGING (ISO-8601 → stdout)
+# 0.  LOGGING (ISO-8601 → stdout)
 # ──────────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -39,7 +39,7 @@ logging.basicConfig(
 log = logging.getLogger("app")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. ENV & OPENAI
+# 1.  ENV & OPENAI
 # ──────────────────────────────────────────────────────────────────────────────
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
@@ -62,7 +62,7 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. FLASK & DB
+# 2.  FLASK & DB
 # ──────────────────────────────────────────────────────────────────────────────
 os.makedirs("/app/data", exist_ok=True)
 
@@ -72,7 +72,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////app/data/data.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
-# (models unchanged) ──────────────────────────────────────────────────────────
+
 class Client(db.Model):
     __tablename__ = "client"
     id = db.Column(db.Integer, primary_key=True)
@@ -98,18 +98,24 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. ASSISTANT TOOLS  (thread-local httpx.Client)
+# 3.  ASSISTANT TOOLS  (thread-local httpx.Client)
 # ──────────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = Timeout(6.0)
-_HTTP_LIMITS = Limits(max_keepalive_connections=20, max_connections=50)
+HTTP_LIMITS = Limits(max_keepalive_connections=20, max_connections=50)
 _tls = threading.local()
 
 
 def _get_client() -> httpx.Client:
-    """Return thread-local httpx.Client (keep-alive, but no cross-thread races)."""
     if not hasattr(_tls, "client"):
-        _tls.client = httpx.Client(timeout=HTTP_TIMEOUT, limits=_HTTP_LIMITS)
+        _tls.client = httpx.Client(timeout=HTTP_TIMEOUT, limits=HTTP_LIMITS)
     return _tls.client
+
+
+def _close_thread_client() -> None:
+    cli = getattr(_tls, "client", None)
+    if cli:
+        cli.close()
+        delattr(_tls, "client")
 
 
 @functools.lru_cache(maxsize=2048)
@@ -175,7 +181,6 @@ def get_invoice_by_id(invoice_id: str) -> dict:
 
 
 TOOLS = [
-    # (unchanged)
     {
         "type": "function",
         "function": {
@@ -259,7 +264,7 @@ def _tool_call_ready(call: Any) -> bool:
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (token batching + metrics)
+# 5.  STREAMING CHAT  (batch-flush + metrics)
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
@@ -303,7 +308,6 @@ def _flush_buf(buf: list[str], q: queue.Queue):
 
 
 def pipe_events(events, q: queue.Queue, tid: str):
-    """Forward streamed events to the SSE queue with batching + collect timing metrics."""
     run_id: str | None = None
     t0 = time.perf_counter()
     run_created_at: float | None = None
@@ -312,7 +316,8 @@ def pipe_events(events, q: queue.Queue, tid: str):
     n_frag = 0
 
     tok_buf: list[str] = []
-    next_flush = time.perf_counter() + 0.05      # flush every 50 ms
+    buf_chars = 0
+    next_flush = time.perf_counter() + 0.10     # flush every 100 ms
 
     for ev in events:
         if ev.event == "thread.run.created":
@@ -331,9 +336,11 @@ def pipe_events(events, q: queue.Queue, tid: str):
                                  run_id, first_tok - (run_created_at or t0))
                     n_frag += 1
                     tok_buf.append(part.text.value)
-                    if len(tok_buf) >= 25 or time.perf_counter() >= next_flush:
+                    buf_chars += len(part.text.value)
+                    if buf_chars >= 256 or time.perf_counter() >= next_flush:
                         _flush_buf(tok_buf, q)
-                        next_flush = time.perf_counter() + 0.05
+                        buf_chars = 0
+                        next_flush = time.perf_counter() + 0.10
 
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
@@ -391,14 +398,17 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume() -> None:
-        with app.app_context():
-            first = client.beta.threads.runs.create(
-                thread_id=tid, assistant_id=ASSISTANT_ID,
-                tools=TOOLS, stream=True,
-                **({"model": MODEL} if MODEL else {}),
-            )
-            pipe_events(first, q, tid)
-        log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
+        try:
+            with app.app_context():
+                first = client.beta.threads.runs.create(
+                    thread_id=tid, assistant_id=ASSISTANT_ID,
+                    tools=TOOLS, stream=True,
+                    **({"model": MODEL} if MODEL else {}),
+                )
+                pipe_events(first, q, tid)
+        finally:
+            _close_thread_client()
+            log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
 
     threading.Thread(target=consume, daemon=True).start()
     return Response(
