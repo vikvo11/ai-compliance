@@ -242,7 +242,7 @@ def _tool_call_ready(call: Any) -> bool:
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (detailed timing)
+# 5.  STREAMING CHAT  (detailed timing + metrics summary)
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
@@ -280,14 +280,18 @@ def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
 
 
 def pipe_events(events, q: queue.Queue, tid: str):
+    """Forward streamed events to the SSE queue + collect timing metrics."""
     run_id: str | None = None
     t0 = time.perf_counter()
+    run_created_at: float | None = None
     first_tok: float | None = None
+    done_at: float | None = None
     n_frag = 0
 
     for ev in events:
         if ev.event == "thread.run.created":
             run_id = ev.data.id
+            run_created_at = time.perf_counter()
             log.info("run %s created", run_id)
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
             run_id = ev.data.run_id
@@ -297,7 +301,10 @@ def pipe_events(events, q: queue.Queue, tid: str):
                 if part.type == "text":
                     if first_tok is None:
                         first_tok = time.perf_counter()
-                        log.info("run %s first-token %.3f s", run_id, first_tok - t0)
+                        log.info(
+                            "run %s first-token %.3f s",
+                            run_id, first_tok - (run_created_at or t0)
+                        )
                     n_frag += 1
                     q.put(part.text.value)
 
@@ -306,9 +313,28 @@ def pipe_events(events, q: queue.Queue, tid: str):
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
 
         elif ev.event == "thread.run.completed":
-            log.info("run %s done (%d frags, %.3f s total)", run_id, n_frag, time.perf_counter() - t0)
+            done_at = time.perf_counter()
+            log.info(
+                "run %s done (%d frags, %.3f s total)",
+                run_id, n_frag, done_at - t0
+            )
             q.put(None)
-            return
+            break
+
+    # After the loop: build & log metrics summary
+    if run_created_at and done_at:
+        metrics = {
+            "queue_to_run_created": f"{run_created_at - t0:.3f}s",
+            "run_created_to_first_token": (
+                f"{first_tok - run_created_at:.3f}s" if first_tok else "n/a"
+            ),
+            "first_token_to_done": (
+                f"{done_at - first_tok:.3f}s" if first_tok else "n/a"
+            ),
+            "overall": f"{done_at - t0:.3f}s",
+            "fragments": n_frag,
+        }
+        log.info("timing-summary %s %s", run_id, json.dumps(metrics, ensure_ascii=False))
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
