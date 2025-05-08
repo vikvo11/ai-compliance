@@ -1,34 +1,26 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, SDK ≥ 1.23)
-# NOTE: All comments are in English!
-
+# Flask + SQLAlchemy + OpenAI Assistants (blocking + streaming, new SDK)
 from __future__ import annotations
 
-import json
 import os
-import queue
-import sys
-import threading
 import time
-from collections.abc import Generator, Sequence
+import json
+import queue
+import threading
+import requests
+import sys
+import configparser
+from collections.abc import Sequence, Generator
 from typing import Any, Optional
 
-import configparser
-import openai
-import pandas as pd
-import requests
 from flask import (
-    Flask,
-    Response,
-    flash,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    session,
+    Flask, render_template, request, redirect,
+    flash, jsonify, session, Response
 )
 from flask_sqlalchemy import SQLAlchemy
+import pandas as pd
+import openai
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 0.  ENV & OPENAI
@@ -36,14 +28,17 @@ from flask_sqlalchemy import SQLAlchemy
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-MODEL: Optional[str] = (
-    cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
-)
-ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")).strip()
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
+                         fallback=os.getenv("OPENAI_API_KEY"))
+MODEL: Optional[str] = cfg.get("DEFAULT", "model",
+                               fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
+ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id",
+                            fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
-if not OPENAI_API_KEY or not ASSISTANT_ID:
-    sys.exit("❌  OPENAI_API_KEY / ASSISTANT_ID is not configured.")
+if not OPENAI_API_KEY:
+    sys.exit("❌  OPENAI_API_KEY is not configured.")
+if not ASSISTANT_ID:
+    sys.exit("❌  ASSISTANT_ID is not configured.")
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
@@ -64,7 +59,12 @@ class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128))
-    invoices = db.relationship("Invoice", backref="client", lazy=True, cascade="all, delete-orphan")
+    invoices = db.relationship(
+        "Invoice",
+        backref="client",
+        lazy=True,
+        cascade="all, delete-orphan",
+    )
 
 
 class Invoice(db.Model):
@@ -83,9 +83,12 @@ with app.app_context():
 # ──────────────────────────────────────────────────────────────────────────────
 # 2.  ASSISTANT TOOLS
 # ──────────────────────────────────────────────────────────────────────────────
-def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D401
-    """Return a short string with the current weather for the location."""
+def get_current_weather(location: str, unit: str = "celsius") -> str:
+    """
+    Return a short string with the current weather for the location.
+    """
     try:
+        print(f"[DEBUG] get_current_weather({location=}, {unit=})")
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1},
@@ -96,7 +99,8 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D
         lat, lon = geo[0]["latitude"], geo[0]["longitude"]
         cw = requests.get(
             "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
+            params={"latitude": lat, "longitude": lon,
+                    "current_weather": True},
             timeout=5,
         ).json().get("current_weather", {})
         return (
@@ -108,6 +112,10 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
+    """
+    Look up an invoice in the database and return a JSON-serialisable dict.
+    """
+    print(f"[DEBUG] get_invoice_by_id({invoice_id=})")
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
@@ -157,12 +165,21 @@ TOOLS = [
 # 3.  SHARED HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
+    """
+    Ensure there is an OpenAI thread ID stored in the Flask session.
+    """
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
+        print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
+    else:
+        print(f"[DEBUG] Using existing thread ID: {session['thread_id']}")
     return session["thread_id"]
 
 
 def _run_tool(c: Any) -> str:
+    """
+    Execute one tool call and return its output string.
+    """
     args = json.loads(c.function.arguments)
     fn = c.function.name
     if fn == "get_current_weather":
@@ -171,18 +188,6 @@ def _run_tool(c: Any) -> str:
         return json.dumps(get_invoice_by_id(**args))
     return f"Unknown tool {fn}"
 
-
-def _wait_until_no_active_runs(tid: str, timeout: float = 60.0) -> None:
-    done = {"completed", "failed", "cancelled", "expired"}
-    end_at = time.time() + timeout
-    while True:
-        runs = client.beta.threads.runs.list(thread_id=tid, limit=20).data
-        if all(r.status in done for r in runs):
-            return
-        if time.time() > end_at:
-            ids = ", ".join(r.id for r in runs if r.status not in done)
-            raise RuntimeError(f"Thread still has active runs: {ids}")
-        time.sleep(0.35)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4.  WEB ROUTES  (index / delete / edit / export)
@@ -199,7 +204,8 @@ def index():
         for _, row in df.iterrows():
             cl = Client.query.filter_by(name=row["client_name"]).first()
             if not cl:
-                cl = Client(name=row["client_name"], email=row.get("client_email") or "")
+                cl = Client(name=row["client_name"],
+                            email=row.get("client_email") or "")
                 db.session.add(cl)
                 db.session.flush()
             db.session.add(
@@ -214,6 +220,7 @@ def index():
         db.session.commit()
         flash("Invoices uploaded successfully.")
         return redirect("/")
+
     return render_template("index.html", invoices=Invoice.query.all())
 
 
@@ -248,7 +255,9 @@ def edit_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
-    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
+    rows = (
+        [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
+    )
     csv_data = pd.DataFrame(
         [
             {
@@ -262,28 +271,33 @@ def export_invoice(invoice_id: int | None = None):
             for r in rows
         ]
     ).to_csv(index=False)
+
     fname = f"invoice_{invoice_id or 'all'}.csv"
-    return csv_data, 200, {
-        "Content-Type": "text/csv",
-        "Content-Disposition": f'attachment; filename="{fname}"',
-    }
+    return (
+        csv_data,
+        200,
+        {
+            "Content-Type": "text/csv",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        },
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5.  BLOCKING CHAT   (/chat)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat", methods=["POST"])
 def chat_sync():
+    """
+    Blocking (synchronous) chat endpoint.
+    """
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    try:
-        _wait_until_no_active_runs(tid)
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 429
-
-    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
+    client.beta.threads.messages.create(
+        thread_id=tid, role="user", content=user_msg
+    )
 
     run = client.beta.threads.runs.create(
         thread_id=tid,
@@ -292,11 +306,13 @@ def chat_sync():
         **({"model": MODEL} if MODEL else {}),
     )
 
+    # Poll the run status until completion or error.
     while True:
         status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
         if status.status == "requires_action":
             calls = status.required_action.submit_tool_outputs.tool_calls
-            outputs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
+            outputs = [{"tool_call_id": c.id, "output": _run_tool(c)}
+                       for c in calls]
             client.beta.threads.runs.submit_tool_outputs(
                 thread_id=tid, run_id=run.id, tool_outputs=outputs
             )
@@ -306,6 +322,7 @@ def chat_sync():
             return jsonify({"error": f"Run {status.status}"}), 500
         time.sleep(0.35)
 
+    # Grab last assistant message
     msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
     for msg in msgs.data:
         if msg.role == "assistant":
@@ -313,25 +330,44 @@ def chat_sync():
     return jsonify({"error": "No assistant response"}), 500
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream)
+# 6.  STREAMING CHAT  (/chat/stream) – robust tool-call handling
 # ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(ev: Any) -> list[Any] | None:
+def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
+    """
+    Try every known spot where tool_calls may appear.
+    Return (tool_calls, run_id) or None if not present.
+    """
+    # A) thread.run.step.delta
     delta = getattr(ev.data, "delta", None)
-    if delta and getattr(delta, "tool_calls", None):
-        return delta.tool_calls
-    sd = getattr(delta, "step_details", None)
-    if sd and getattr(sd, "tool_calls", None):
-        return sd.tool_calls
+    if delta:
+        tc = getattr(delta, "tool_calls", None)
+        if tc:
+            return tc, ev.data.run_id
+        # v1.18 style: delta.step_details.tool_calls
+        sd = getattr(delta, "step_details", None)
+        if sd and getattr(sd, "tool_calls", None):
+            return sd.tool_calls, ev.data.run_id
+
+    # B) thread.run.step.created / in_progress (step.tool_calls)
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
-        return step.tool_calls
+        return step.tool_calls, ev.data.run_id
+
+    # C) thread.run.requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
-        return ra.submit_tool_outputs.tool_calls
+        return ra.submit_tool_outputs.tool_calls, ev.data.id
     return None
 
 
-def _follow_stream_after_tools(run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str) -> None:
+def _follow_stream_after_tools(
+        run_id: str,
+        calls: Sequence[Any],
+        q: queue.Queue,
+        tid: str) -> None:
+    """
+    Execute functions, then stream the continuation of the run into the same queue.
+    """
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
@@ -339,17 +375,28 @@ def _follow_stream_after_tools(run_id: str, calls: Sequence[Any], q: queue.Queue
         tool_outputs=outs,
         stream=True,
     )
-    pipe_events(follow, q, tid, run_id)
+    pipe_events(follow, q, tid)        # recurse
 
 
-def pipe_events(events, q: queue.Queue, tid: str, run_id: str) -> None:
+def pipe_events(events, q: queue.Queue, tid: str) -> None:
+    """
+    Iterate (recursively) over event stream, pushing text chunks into `q`.
+    """
     for ev in events:
+        print("[EVENT]", ev.event, flush=True)
+
+        # 1) text delta
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
-        elif (tcs := _extract_tool_calls(ev)) is not None:
-            _follow_stream_after_tools(run_id, tcs, q, tid)
+
+        # 2) Any event that *might* contain tool calls
+        elif (tc_block := _extract_tool_calls(ev)) is not None:
+            tool_calls, run_id = tc_block
+            _follow_stream_after_tools(run_id, tool_calls, q, tid)
+
+        # 3) Run finished
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
@@ -378,23 +425,23 @@ def chat_stream():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    try:
-        _wait_until_no_active_runs(tid)
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 429
+    client.beta.threads.messages.create(thread_id=tid,
+                                        role="user",
+                                        content=user_msg)
 
-    client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume():
-        run = client.beta.threads.runs.create(
+        print("[DEBUG] consume() started", flush=True)
+        first = client.beta.threads.runs.create(
             thread_id=tid,
             assistant_id=ASSISTANT_ID,
             tools=TOOLS,
+            stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        events = client.beta.threads.runs.stream(tid, run.id)  # ← positional args
-        pipe_events(events, q, tid, run.id)
+        pipe_events(first, q, tid)
+        print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
 
@@ -410,4 +457,5 @@ def chat_stream():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
+    print("[DEBUG] Starting Flask app on 0.0.0.0:5005")
     app.run(host="0.0.0.0", port=5005, debug=True)
