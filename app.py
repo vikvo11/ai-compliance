@@ -96,47 +96,43 @@ def _run_tool(name: str, args: str) -> str:
 def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
                  q: queue.Queue[str | None]) -> str:
     log.info("RUN tool=%s id=%s args=%s", name, tc_id, args_json)
+    print(f"DBG | RUN tool={name} id={tc_id}")
+
     out = _run_tool(name, args_json)
 
-    # 1) Новый SDK (≥1.50) — метод в .actions
-    if hasattr(client.responses, "actions"):
+    # ── предпочитаем официальный метод, если он есть ──────────
+    if hasattr(client.responses, "actions"):                 # SDK ≥ 1.50
         submit = client.responses.actions.submit_tool_outputs
 
-    # 2) Ветвь 1.3 – 1.4
-    elif hasattr(client.responses, "submit_tool_outputs"):
+    elif hasattr(client.responses, "submit_tool_outputs"):   # SDK 1.3–1.4
         submit = client.responses.submit_tool_outputs
 
-    # 3) Совсем старый интерфейс → низкоуровневый POST
-    else:
-        # --- ищем подходящий класс, чтобы отдать в cast_to ----------
+    else:                                                    # fallback
         try:
-            # 1.78.0+
-            from openai.resources.responses import ResponseObject as _Resp
-            Cast = _Resp
+            from openai.resources.responses import ResponseObject as Cast
         except ImportError:
             try:
-                # 1.3 – 1.7
-                from openai.resources.responses import Response as _Resp
-                Cast = _Resp
+                from openai.resources.responses import Response as Cast
             except ImportError:
-                # если вообще ничего не нашлось
-                Cast = dict
-        # ------------------------------------------------------------
+                Cast = dict                              # самый грубый вариант
 
         def submit(response_id, tool_outputs, stream):
+            # ⬇⬇ *без* ведущего /v1 !
+            path = f"responses/{response_id}/actions/submit_tool_outputs"
             return client.post(
-                f"/v1/responses/{response_id}/actions/submit_tool_outputs",
+                path,
                 body={"tool_outputs": tool_outputs},
                 stream=stream,
-                cast_to=Cast,          # ← теперь всегда есть корректный тип
+                cast_to=Cast,
             )
+    # ──────────────────────────────────────────────────────────
 
     follow = submit(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    return _pipe(follow, q)            # рекурсивно продолжаем стрим
+    return _pipe(follow, q)          # рекурсивно продолжаем поток
 
 
 # ─── основной парсер потока ──────────────────────────────────
