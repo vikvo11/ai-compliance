@@ -16,8 +16,8 @@
 /* --------------------------------
    CONSTANTS
 ----------------------------------- */
-const COMPACT_HEIGHT = '420px';       // fixed height when folded
-const USE_STREAM     = true;          // switch to `/chat` if false
+const COMPACT_HEIGHT = '420px';   // fixed height when folded
+const USE_STREAM     = true;      // switch to `/chat` if false
 
 /* --------------------------------
    DRAG-AND-DROP FOR CSV
@@ -93,7 +93,7 @@ async function saveInvoice(e,id){
 }
 const toggleEdit=id=>{
   const row=document.getElementById(`edit-row-${id}`);
-  row.style.display=(row.style.display==='none')?'table-row':'none';
+  row.style.display = (row.style.display==='none') ? 'table-row' : 'none';
 };
 
 /* --------------------------------
@@ -102,8 +102,8 @@ const toggleEdit=id=>{
 function typeInto(el,txt,speed=60,cb){
   let i=0;(function t(){
     if(i<txt.length){
-      'placeholder'in el ? el.placeholder=txt.slice(0,++i)
-                         : el.value+=txt[i++-1];
+      ('placeholder' in el) ? el.placeholder = txt.slice(0,++i)
+                            : el.value      += txt[i++-1];
       setTimeout(t,speed);
     }else cb?.();
   })();
@@ -158,8 +158,8 @@ onceVisible('#actions',()=>{
 ----------------------------------- */
 function crackGlass(){
   const block=document.getElementById('ai-extract-block');
-  const cv=document.getElementById('crack-effect'); if(!cv) return;
-  const ctx=cv.getContext('2d'); if(!ctx) return;
+  const cv   =document.getElementById('crack-effect'); if(!cv) return;
+  const ctx  =cv.getContext('2d');                    if(!ctx) return;
 
   cv.style.display='block'; cv.style.opacity='1'; cv.style.transition='';
   cv.width=300; cv.height=200; ctx.clearRect(0,0,cv.width,cv.height);
@@ -171,13 +171,16 @@ function crackGlass(){
   for(let i=0;i<24;i++){
     const ang=i*Math.PI*2/24,len=50+Math.random()*100;
     ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.cos(ang)*len,cy+Math.sin(ang)*len);
-    ctx.strokeStyle=`rgba(100,100,100,${0.5+Math.random()*0.5})`; ctx.lineWidth=0.5+Math.random()*2; ctx.stroke();
+    ctx.strokeStyle=`rgba(100,100,100,${0.5+Math.random()*0.5})`;
+    ctx.lineWidth=0.5+Math.random()*2; ctx.stroke();
   }
   for(let r=20;r<=100;r+=20){
     ctx.beginPath(); ctx.arc(cx,cy,r+Math.random()*5,0,Math.PI*2);
-    ctx.strokeStyle=`rgba(120,120,120,${Math.random()*0.4+0.3})`; ctx.lineWidth=0.3+Math.random(); ctx.stroke();
+    ctx.strokeStyle=`rgba(120,120,120,${Math.random()*0.4+0.3})`;
+    ctx.lineWidth=0.3+Math.random(); ctx.stroke();
   }
-  setTimeout(()=>{ cv.style.transition='opacity .8s'; cv.style.opacity='0';
+  setTimeout(()=>{
+    cv.style.transition='opacity .8s'; cv.style.opacity='0';
     setTimeout(()=>{ cv.style.display='none'; cv.style.transition=''; },800);
   },1300);
 }
@@ -213,95 +216,122 @@ const chatBox   = document.getElementById('chat-box');
 const chatInput = chatBox.querySelector('textarea');
 const sendBtn   = chatBox.querySelector('button.send');
 
-let chatBusy=false;
+let chatBusy = false;
 
 function addMessage(txt, cls='message'){
-  const d=document.createElement('div');
-  d.className=cls; d.textContent=txt;
-  const pane=chatBox.querySelector('.messages');
-  pane.appendChild(d); pane.scrollTop=pane.scrollHeight;
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = txt;
+  const pane = chatBox.querySelector('.messages');
+  pane.appendChild(d); pane.scrollTop = pane.scrollHeight;
   return d;
 }
 
 launcher.addEventListener('click',()=>{
-  if(chatBox.style.display==='flex'){ chatBox.style.display='none'; return; }
-  chatBox.style.display='flex'; chatBox.style.flexDirection='column';
-  chatInput.disabled=false; sendBtn.disabled=false; chatInput.focus();
+  if(chatBox.style.display === 'flex'){ chatBox.style.display = 'none'; return; }
+  chatBox.style.display = 'flex'; chatBox.style.flexDirection = 'column';
+  chatInput.removeAttribute('disabled');
+  sendBtn.removeAttribute('disabled');
+  chatInput.focus();
 });
 
-/* ellipsis anim */
-const startDots=el=>{
-  let dots=1; el.textContent='.'; el._timer=setInterval(()=>{ dots=(dots%3)+1; el.textContent='.'.repeat(dots); },400);
+/* ellipsis animation ------------------------------------- */
+const startDots = el =>{
+  let dots = 1; el.textContent = '.';
+  el._timer = setInterval(()=>{ dots = (dots % 3) + 1; el.textContent = '.'.repeat(dots); },400);
 };
-const stopDots =el=>{ clearInterval(el._timer); delete el._timer; };
+const stopDots  = el =>{ clearInterval(el._timer); delete el._timer; };
 
-/* send */
+/* send --------------------------------------------------- */
 async function sendMessage(){
-  const msg=chatInput.value.trim();
+  const msg = chatInput.value.trim();
   if(!msg || chatBusy) return;
 
-  chatBusy=true; chatInput.disabled=true; sendBtn.disabled=true;
+  chatBusy = true;
+  chatInput.setAttribute('disabled','');
+  sendBtn.setAttribute('disabled','');
 
   addMessage(msg,'message user');
-  chatInput.value='';
+  chatInput.value = '';
 
-  const aiDiv=addMessage('', 'message assistant typing');
+  const aiDiv = addMessage('', 'message assistant typing');
   startDots(aiDiv);
 
-  const push=chunk=>{
+  const push = chunk =>{
     if(aiDiv.classList.contains('typing')){
-      stopDots(aiDiv); aiDiv.textContent=''; aiDiv.classList.remove('typing');
+      stopDots(aiDiv); aiDiv.textContent = ''; aiDiv.classList.remove('typing');
     }
-    aiDiv.textContent+=chunk;
-    chatBox.querySelector('.messages').scrollTop=chatBox.querySelector('.messages').scrollHeight;
+    aiDiv.textContent += chunk;
+    chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
   };
 
   try{
     if(USE_STREAM){
-      const res=await fetch('/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
+      const res = await fetch('/chat/stream',{
+        method  :'POST',
+        headers :{'Content-Type':'application/json'},
+        body    :JSON.stringify({message:msg})
+      });
       if(!res.ok || !res.body) throw new Error('Network error');
-      const rdr=res.body.getReader(), dec=new TextDecoder(); let buf='';
-      while(true){
-        const {value,done}=await rdr.read(); if(done) break;
-        buf+=dec.decode(value,{stream:true});
-        const parts=buf.split('\n\n'); buf=parts.pop();
+      const rdr = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+
+      outer: while(true){
+        const {value, done} = await rdr.read();
+        if(done) break;
+        buf += dec.decode(value, {stream:true});
+        const parts = buf.split('\n\n'); buf = parts.pop();
+
         for(const p of parts){
-          if(p.startsWith('event: done')){ rdr.cancel(); break; }
-          const l=p.split('\n').find(x=>x.startsWith('data:'));
-          if(l) push(l.slice(6));
+          if(p.startsWith('event: done') || p.includes('[DONE]')){
+            await rdr.cancel();
+            break outer;
+          }
+          const line = p.split('\n').find(l => l.startsWith('data:'));
+          if(line) push(line.slice(6));
         }
       }
     }else{
-      const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
-      const d=await res.json();
-      stopDots(aiDiv); aiDiv.textContent=d.response||d.error||'No response';
+      const res = await fetch('/chat',{
+        method :'POST',
+        headers:{'Content-Type':'application/json'},
+        body   :JSON.stringify({message:msg})
+      });
+      const d = await res.json();
+      stopDots(aiDiv);
+      aiDiv.textContent = d.response || d.error || 'No response';
     }
   }catch(err){
-    console.error(err); stopDots(aiDiv); aiDiv.textContent='Error contacting server';
+    console.error(err);
+    stopDots(aiDiv);
+    aiDiv.textContent = 'Error contacting server';
   }finally{
-    chatBusy=false; chatInput.disabled=false; sendBtn.disabled=false;
-    aiDiv.classList.remove('typing'); chatInput.focus();
+    stopDots(aiDiv);                         // safe-guard
+    chatBusy = false;
+    chatInput.removeAttribute('disabled');
+    sendBtn.removeAttribute('disabled');
+    aiDiv.classList.remove('typing');
+    chatInput.focus();
   }
 }
 
 sendBtn.addEventListener('click',sendMessage);
 chatInput.addEventListener('keydown',e=>{
-  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
 });
 
 /* --------------------------------
    AUTO THEME
 ----------------------------------- */
 (()=>{
-  const hr=new Date().getHours();
-  if(hr>=19||hr<6){
+  const hr = new Date().getHours();
+  if(hr>=19 || hr<6){
     document.body.classList.add('night-theme');
     document.getElementById('star-background')?.style.setProperty('display','block');
   }
 })();
 document.getElementById('theme-toggle')?.addEventListener('click',()=>{
-  const body=document.body, stars=document.getElementById('star-background');
-  const night=body.classList.toggle('night-theme');
+  const body  = document.body;
+  const stars = document.getElementById('star-background');
+  const night = body.classList.toggle('night-theme');
   stars && (stars.style.display = night ? 'block' : 'none');
   localStorage.setItem('theme', night ? 'night' : 'light');
 });
