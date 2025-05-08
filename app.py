@@ -107,82 +107,93 @@ def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
 
 # ─── основной парсер потока ──────────────────────────────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
+    """
+    Stream-парсер Responses-API c явными print-отладками.
+    INFO-лог остаётся, но дублируем всё в stdout, чтобы видеть
+    даже при скромных настройках логгера / Docker-redirect.
+    """
+    print("DBG | PIPE START")                  # ← начало потока
     resp_id = ""
-    buf: dict[str, dict] = {}    # id → {"name": str, "parts": list[str]}
+    buf: dict[str, dict] = {}                  # id → {"name": str, "parts": []}
 
     for ev in stream:
         typ   = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
         delta = getattr(ev, "delta", None)
         log.info("▶ %s   delta=%s", typ, bool(delta))
+        print(f"DBG | ▶ {typ:40} delta={bool(delta)}")
 
-        # запоминаем последний response.id
         if getattr(ev, "response", None):
             resp_id = ev.response.id
+            print(f"DBG |   response.id = {resp_id}")
 
-        # текстовые токены (игнорируем куски JSON-аргументов)
+        # текстовые токены
         if isinstance(delta, str) and "arguments" not in typ:
+            print(f"DBG |   text: {delta[:70].replace(chr(10),'⏎')}")
             q.put(delta)
 
-        # ── 1. старая ветка: response.tool_calls ───────────────
+        # ── старая schema: response.tool_calls ───────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
+                print(f"DBG |   tool_call id={tc.id} name={tc.function.name}")
                 full = getattr(tc.function, "arguments", None)
                 if full:
+                    print("DBG |   immediate JSON args")
                     resp_id = _finish_tool(resp_id, tc.id, tc.function.name, full, q)
 
-# ── 2. «новая» схема: output_item.added ─────────────────────
-if typ == "response.output_item.added":
-    item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
-               or ev.model_dump(exclude_none=True).get("item")
-    item = item_obj if isinstance(item_obj, dict) else \
-           item_obj.model_dump(exclude_none=True)
+        # ── новая schema: output_item.added ──────────────────
+        if typ == "response.output_item.added":
+            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
+                       or ev.model_dump(exclude_none=True).get("item")
+            item = item_obj if isinstance(item_obj, dict) else \
+                   item_obj.model_dump(exclude_none=True)
+            if item and item.get("type") in ("function_call", "tool_call"):
+                iid = item["id"]
+                fname = (
+                    item.get("function", {}).get("name")
+                    or item.get("tool_call", {}).get("name")
+                    or item.get("name")
+                )
+                if fname:
+                    buf[iid] = {"name": fname, "parts": []}
+                    print(f"DBG |   declare id={iid} func={fname}")
 
-    if item and item.get("type") in ("function_call", "tool_call"):
-        iid = item["id"]
-        # ←――――  З Д Е С Ь  ――――――――――――――――――――――――――――――――
-        fname = (
-            item.get("function", {}).get("name")
-            or item.get("tool_call", {}).get("name")
-            or item.get("name")            # ← самый упрощённый вариант
-        )
-        # ―――――――――――――――――――――――――――――――――――――――――――――――
-        if fname:
-            buf[iid] = {"name": fname, "parts": []}
-            log.info("  item declared id=%s func=%s", iid, fname)
-
-        # накапливаем кусочки JSON-аргументов
+        # аргумент-дельты
         if "arguments.delta" in typ:
-            iid = getattr(ev, "output_item_id", None) \
-                  or getattr(ev, "item_id", None) \
+            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
                   or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
+                print(f"DBG |   arg-chunk for {iid}  len={len(buf[iid]['parts'])}")
 
-        # закрытие аргументов → исполняем
+        # окончание аргументов
         if typ.endswith("arguments.done"):
-            iid = getattr(ev, "output_item_id", None) \
-                  or getattr(ev, "item_id", None) \
+            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
                   or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
+                print(f"DBG |   args.done id={iid}  json={full_json}")
                 resp_id = _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
                 buf.pop(iid, None)
 
-        # ── 3. very old: required_action.submit_tool_outputs ───
+        # required_action (старый fallback)
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
-            outs = [{"tool_call_id": tc.id, "output": _run_tool(tc.name, tc.args)}
+            print("DBG |   required_action submit_tool_outputs")
+            outs = [{"tool_call_id": tc.id,
+                     "output": _run_tool(tc.name, tc.args)}
                     for tc in act.submit_tool_outputs.tool_calls]
             follow = client.responses.submit_tool_outputs(
                 response_id=ev.id, tool_outputs=outs, stream=True)
             resp_id = _pipe(follow, q)
 
-        # завершение потока
+        # финальные маркеры
         if typ in ("response.done", "response.completed", "response.output_text.done"):
+            print(f"DBG | PIPE FINISH — {typ}")
             q.put(None)
             return resp_id
 
+    print("DBG | PIPE END without explicit done")
     q.put(None)
     return resp_id
     
