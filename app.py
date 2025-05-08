@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 import pandas as pd
 import configparser
+import openai
 from openai import OpenAI, NotFoundError      # ← new import
 from flask import (
     Flask, render_template, request, redirect, flash,
