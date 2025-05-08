@@ -180,8 +180,8 @@ def ensure_thread() -> str:
 def _safe_add_user_message(tid: str, content: str) -> str:
     """
     Add a user message to a thread. If the thread is locked by an active run,
-    create a fresh thread, store it in the session, add the message there,
-    and return the new thread id.
+    create a fresh thread, store it in session, add the message there, and
+    return the new thread id.
     """
     try:
         client.beta.threads.messages.create(thread_id=tid,
@@ -220,12 +220,16 @@ def _run_tool(c: Any) -> str:
 
 
 def _arguments_ready(call: Any) -> bool:
-    """Return True if call.function.arguments contains valid JSON."""
+    """Return True if function.arguments contains valid JSON."""
     try:
         return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
     except Exception:
         return False
 
+
+def _tool_call_ready(call: Any) -> bool:
+    """Tool-call is ready when arguments & id are both present."""
+    return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4.  WEB ROUTES  (index / delete / edit / export)
@@ -325,9 +329,6 @@ def export_invoice(invoice_id: int | None = None):
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat", methods=["POST"])
 def chat_sync():
-    """
-    Blocking (synchronous) chat endpoint.
-    """
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
@@ -342,13 +343,13 @@ def chat_sync():
         **({"model": MODEL} if MODEL else {}),
     )
 
-    # Poll the run status until completion or error.
+    # Poll run status until completion or error
     while True:
         status = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
         if status.status == "requires_action":
             calls = status.required_action.submit_tool_outputs.tool_calls
             outputs = [{"tool_call_id": c.id, "output": _run_tool(c)}
-                       for c in calls]
+                       for c in calls if _tool_call_ready(c)]
             client.beta.threads.runs.submit_tool_outputs(
                 thread_id=tid, run_id=run.id, tool_outputs=outputs
             )
@@ -358,7 +359,7 @@ def chat_sync():
             return jsonify({"error": f"Run {status.status}"}), 500
         time.sleep(0.35)
 
-    # Grab last assistant message
+    # Last assistant message
     msgs = client.beta.threads.messages.list(thread_id=tid, order="desc")
     for msg in msgs.data:
         if msg.role == "assistant":
@@ -371,33 +372,31 @@ def chat_sync():
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
                         ) -> tuple[list[Any], str] | None:
     """
-    Return (tool_calls, run_id) only when every call already has
-    non-empty, JSON-parsable arguments.
+    Return (tool_calls, run_id) only when each call has id + valid arguments.
     """
-    # A) thread.run.step.delta
+    # A) step.delta
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
-        if tc and run_id_hint and all(_arguments_ready(c) for c in tc):
+        if tc and run_id_hint and all(_tool_call_ready(c) for c in tc):
             return tc, run_id_hint
-        # v1.18-style
         sd = getattr(delta, "step_details", None)
         if sd and getattr(sd, "tool_calls", None) and run_id_hint and \
-                all(_arguments_ready(c) for c in sd.tool_calls):
+                all(_tool_call_ready(c) for c in sd.tool_calls):
             return sd.tool_calls, run_id_hint
 
-    # B) thread.run.step.created / in_progress
+    # B) step.created / in_progress
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
         tc = step.tool_calls
-        if all(_arguments_ready(c) for c in tc):
+        if all(_tool_call_ready(c) for c in tc):
             return tc, step.run_id
 
-    # C) thread.run.requires_action
+    # C) requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         tc = ra.submit_tool_outputs.tool_calls
-        if all(_arguments_ready(c) for c in tc):
+        if all(_tool_call_ready(c) for c in tc):
             return tc, ev.data.id
 
     return None
@@ -406,56 +405,44 @@ def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
 def _follow_stream_after_tools(run_id: str, calls: Sequence[Any],
                                q: queue.Queue, tid: str) -> None:
     """
-    Execute completed tools, then continue streaming.
+    Execute finished tools, then keep streaming.
     """
-    outs = [
-        {"tool_call_id": c.id, "output": _run_tool(c)}
-        for c in calls if _arguments_ready(c)
-    ]
+    outs = [{"tool_call_id": c.id, "output": _run_tool(c)}
+            for c in calls if _tool_call_ready(c)]
     if not outs:
         return
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
     )
-    pipe_events(follow, q, tid)  # recurse
+    pipe_events(follow, q, tid)
 
 
 def pipe_events(events, q: queue.Queue, tid: str) -> None:
-    """
-    Recursively pipe an event stream into the queue, handling tool calls.
-    """
     run_id: str | None = None
 
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # Track run_id
         if ev.event == "thread.run.created":
             run_id = ev.data.id
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
             run_id = ev.data.run_id
 
-        # 1) Text deltas
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # 2) Tool calls
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
 
-        # 3) Run finished
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
-    """
-    Convert queue items to Server-Sent Events.
-    """
     heartbeat_at = time.time() + 20
     while True:
         try:
@@ -483,15 +470,10 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume() -> None:
-        """
-        Worker thread: start a streaming run and forward its events.
-        """
         print("[DEBUG] consume() started", flush=True)
         first = client.beta.threads.runs.create(
-            thread_id=tid,
-            assistant_id=ASSISTANT_ID,
-            tools=TOOLS,
-            stream=True,
+            thread_id=tid, assistant_id=ASSISTANT_ID,
+            tools=TOOLS, stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
         pipe_events(first, q, tid)
