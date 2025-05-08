@@ -520,5 +520,5 @@ def export_invoice(invoice_id: int | None = None):
 
 # ─────────────────── 8. RUN ──────────────────────────────────
 if __name__ == "__main__":
-    print(client.__version__)  # shows 1.78.0+
+    print(openai.__version__)      # 1.78.0+
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
