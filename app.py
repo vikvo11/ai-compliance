@@ -94,98 +94,83 @@ def _run_tool(name: str, args: str) -> str:
 
 # ─────────── replace the whole _pipe() definition with this ───────────
 def _pipe(stream, q: queue.Queue[str | None]) -> str:
-    """
-    Потоковый парсер Responses API с подробными INFO-логами
-    и дублирующим print().  Работает как раньше, но шаги видны,
-    даже если LOG_LEVEL оставлен в INFO.
-    """
-    log.info("PIPE START -------------------------------")
-    print("PIPE START -------------------------------", flush=True)
-
+    """Парсит поток Responses API (обе схемы funcs), пишет логи, шлёт текст в SSE."""
+    log.info("PIPE START")
     resp_id = ""
-    buf: dict[str, dict] = {}     # tool_call_id → {"name": str, "parts": []}
+
+    # универсальный буфер: id → {"name": str, "parts": list[str]}
+    buf: dict[str, dict[str, list[str]]] = {}
 
     for ev in stream:
         typ = getattr(ev, "event", None) or getattr(ev, "type", None) or ""
         delta = getattr(ev, "delta", None)
-        log.info("▶ %s   delta=%s", typ, bool(delta))
-        print(f"▶ {typ:35} delta={bool(delta)}", flush=True)
+        log.info("▶ %s  delta=%s", typ, bool(delta))
 
-        # remember latest response.id
         if getattr(ev, "response", None):
             resp_id = ev.response.id
-            log.info("  response.id=%s", resp_id)
 
-        # ordinary text (no 'arguments' substring)
+        # ─── обычные текстовые токены ─────────────────────────────
         if isinstance(delta, str) and "arguments" not in typ:
-            log.info("  text=%s", delta.replace("\n", "\\n")[:60])
             q.put(delta)
 
-        # --- new tool_calls header ---
+        # ─── ❶ СТАРАЯ схема: response.tool_calls ─────────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
-                log.info("  tool declared: id=%s  name=%s", tc.id, tc.function.name)
-
-                # full JSON immediately present
                 full = getattr(tc.function, "arguments", None)
-                if full:
-                    log.info("  immediate args: %s", full)
-                    out = _run_tool(tc.function.name, full)
-                    follow = client.responses.submit_tool_outputs(
-                        response_id=resp_id,
-                        tool_outputs=[{"tool_call_id": tc.id, "output": out}],
-                        stream=True,
-                    )
-                    resp_id = _pipe(follow, q)
+                if full:                         # одномоментный JSON
+                    _finish_tool(resp_id, tc.id, tc.function.name, full, q)
 
-        # streamed argument chunks
-        if "arguments.delta" in typ:
-            tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
-            if tc_id and tc_id in buf:
-                buf[tc_id]["parts"].append(delta or "")
-                log.info("  arg-chunk for %s  len=%d",
-                         tc_id, len(buf[tc_id]["parts"]))
+        # ─── ❷ НОВАЯ схема: output_item + arguments.* ────────────
+        if typ == "response.output_item.added":
+            itm = ev.output_item                 # pydantic-объект
+            if getattr(itm, "type", "") == "function_call":
+                buf[itm.id] = {"name": itm.function.name, "parts": []}
+                log.debug("  output_item id=%s  func=%s", itm.id, itm.function.name)
 
-        # last chunk
-        if typ.endswith("arguments.done"):
-            tc_id = getattr(ev, "tool_call_id", getattr(ev, "item_id", None))
-            if tc_id and tc_id in buf:
-                full_json = "".join(buf[tc_id]["parts"])
-                log.info("  args.done id=%s  json=%s", tc_id, full_json)
-                out = _run_tool(buf[tc_id]["name"], full_json)
-                follow = client.responses.submit_tool_outputs(
-                    response_id=resp_id,
-                    tool_outputs=[{"tool_call_id": tc_id, "output": out}],
-                    stream=True,
-                )
-                resp_id = _pipe(follow, q)
-                buf.pop(tc_id, None)
+        if "function_call_arguments.delta" in typ:
+            iid = getattr(ev, "output_item_id", None)
+            if iid and iid in buf:
+                buf[iid]["parts"].append(delta or "")
 
-        # old required_action block
+        if typ.endswith("function_call_arguments.done"):
+            iid = getattr(ev, "output_item_id", None)
+            if iid and iid in buf:
+                full_json = "".join(buf[iid]["parts"])
+                _finish_tool(resp_id, iid, buf[iid]["name"], full_json, q)
+                buf.pop(iid, None)
+
+        # ─── required_action (fallback для very old SDK) ─────────
         act = getattr(ev, "required_action", None)
         if act and getattr(act, "submit_tool_outputs", None):
-            log.info("  required_action with %d tool(s)",
-                     len(act.submit_tool_outputs.tool_calls))
-            outs = []
-            for tc in act.submit_tool_outputs.tool_calls:
-                outs.append({"tool_call_id": tc.id,
-                             "output": _run_tool(tc.name, tc.args)})
+            outs = [{"tool_call_id": tc.id,
+                     "output": _run_tool(tc.name, tc.args)}
+                    for tc in act.submit_tool_outputs.tool_calls]
             follow = client.responses.submit_tool_outputs(
                 response_id=ev.id, tool_outputs=outs, stream=True)
             resp_id = _pipe(follow, q)
 
-        # finish markers
+        # ─── финал ───────────────────────────────────────────────
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            log.info("PIPE FINISH — %s", typ)
-            print("PIPE FINISH ------------------------------", flush=True)
             q.put(None)
+            log.info("PIPE END")
             return resp_id
 
-    log.info("PIPE END without explicit done")
-    print("PIPE END without explicit done", flush=True)
     q.put(None)
+    log.info("PIPE END (no explicit done)")
     return resp_id
+
+
+# helper: завершить tool-call и продолжить стрим
+def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str, q):
+    log.info("  RUN tool %s  id=%s  args=%s", name, tc_id, args_json)
+    out = _run_tool(name, args_json)
+    follow = client.responses.submit_tool_outputs(
+        response_id=resp_id,
+        tool_outputs=[{"tool_call_id": tc_id, "output": out}],
+        stream=True,
+    )
+    _pipe(follow, q)       # рекурсивно продолжаем стрим
 
 # ─────────────────── 5. SSE ──────────────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
