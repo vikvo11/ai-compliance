@@ -324,4 +324,5 @@ def export_invoice(invoice_id: int | None = None):
 
 # ─────────────────── 8. RUN ──────────────────────────────────
 if __name__ == "__main__":
+    print(openai.__version__)
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
