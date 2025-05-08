@@ -131,19 +131,25 @@ def _pipe(stream, q: queue.Queue[str | None]) -> str:
                 if full:
                     resp_id = _finish_tool(resp_id, tc.id, tc.function.name, full, q)
 
-        # ── 2. новая ветка: output_item.added → arguments.* ────
-        if typ == "response.output_item.added":
-            # достаём pydantic-item и приводим к dict
-            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
-                       or ev.model_dump(exclude_none=True).get("item")
-            item = item_obj if isinstance(item_obj, dict) else \
-                   item_obj.model_dump(exclude_none=True)
-            if item and item.get("type") in ("function_call", "tool_call"):
-                iid   = item["id"]
-                fname = item["function"]["name"] if item["type"] == "function_call" \
-                        else item["tool_call"]["name"]
-                buf[iid] = {"name": fname, "parts": []}
-                log.info("  declare id=%s func=%s", iid, fname)
+# ── 2. «новая» схема: output_item.added ─────────────────────
+if typ == "response.output_item.added":
+    item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None) \
+               or ev.model_dump(exclude_none=True).get("item")
+    item = item_obj if isinstance(item_obj, dict) else \
+           item_obj.model_dump(exclude_none=True)
+
+    if item and item.get("type") in ("function_call", "tool_call"):
+        iid = item["id"]
+        # ←――――  З Д Е С Ь  ――――――――――――――――――――――――――――――――
+        fname = (
+            item.get("function", {}).get("name")
+            or item.get("tool_call", {}).get("name")
+            or item.get("name")            # ← самый упрощённый вариант
+        )
+        # ―――――――――――――――――――――――――――――――――――――――――――――――
+        if fname:
+            buf[iid] = {"name": fname, "parts": []}
+            log.info("  item declared id=%s func=%s", iid, fname)
 
         # накапливаем кусочки JSON-аргументов
         if "arguments.delta" in typ:
