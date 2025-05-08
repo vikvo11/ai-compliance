@@ -177,6 +177,29 @@ def ensure_thread() -> str:
     return session["thread_id"]
 
 
+def _safe_add_user_message(tid: str, content: str) -> str:
+    """
+    Add a user message to a thread. If the thread is locked by an active run,
+    create a fresh thread, store it in the session, add the message there,
+    and return the new thread id.
+    """
+    try:
+        client.beta.threads.messages.create(thread_id=tid,
+                                            role="user",
+                                            content=content)
+        return tid
+    except openai.BadRequestError as exc:
+        if "while a run" not in str(exc):
+            raise
+        print("[DEBUG] Thread locked, creating new thread", flush=True)
+        new_tid = client.beta.threads.create().id
+        session["thread_id"] = new_tid
+        client.beta.threads.messages.create(thread_id=new_tid,
+                                            role="user",
+                                            content=content)
+        return new_tid
+
+
 def _run_tool(c: Any) -> str:
     """
     Execute one tool call and return its output string.
@@ -197,10 +220,7 @@ def _run_tool(c: Any) -> str:
 
 
 def _arguments_ready(call: Any) -> bool:
-    """
-    Return True if the tool-call object already contains non-empty, valid JSON
-    in `call.function.arguments`.
-    """
+    """Return True if call.function.arguments contains valid JSON."""
     try:
         return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
     except Exception:
@@ -313,9 +333,7 @@ def chat_sync():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(
-        thread_id=tid, role="user", content=user_msg
-    )
+    tid = _safe_add_user_message(tid, user_msg)
 
     run = client.beta.threads.runs.create(
         thread_id=tid,
@@ -348,87 +366,70 @@ def chat_sync():
     return jsonify({"error": "No assistant response"}), 500
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream) – robust tool-call handling
+# 6.  STREAMING CHAT  (/chat/stream)
 # ──────────────────────────────────────────────────────────────────────────────
-def _extract_tool_calls(
-    ev: Any,
-    *,
-    run_id_hint: str | None = None
-) -> tuple[list[Any], str] | None:
+def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None
+                        ) -> tuple[list[Any], str] | None:
     """
     Return (tool_calls, run_id) only when every call already has
     non-empty, JSON-parsable arguments.
     """
-    # A) thread.run.step.delta (RunStepDeltaEvent)
+    # A) thread.run.step.delta
     delta = getattr(ev.data, "delta", None)
     if delta:
         tc = getattr(delta, "tool_calls", None)
-        if (
-            tc and run_id_hint and
-            all(_arguments_ready(c) for c in tc)
-        ):
+        if tc and run_id_hint and all(_arguments_ready(c) for c in tc):
             return tc, run_id_hint
-        # v1.18 style: delta.step_details.tool_calls
+        # v1.18-style
         sd = getattr(delta, "step_details", None)
-        if (
-            sd and getattr(sd, "tool_calls", None) and run_id_hint and
-            all(_arguments_ready(c) for c in sd.tool_calls)
-        ):
+        if sd and getattr(sd, "tool_calls", None) and run_id_hint and \
+                all(_arguments_ready(c) for c in sd.tool_calls):
             return sd.tool_calls, run_id_hint
 
-    # B) thread.run.step.created / in_progress (RunStepEvent)
+    # B) thread.run.step.created / in_progress
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
         tc = step.tool_calls
         if all(_arguments_ready(c) for c in tc):
-            return tc, step.run_id  # step.run_id exists here
+            return tc, step.run_id
 
     # C) thread.run.requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         tc = ra.submit_tool_outputs.tool_calls
         if all(_arguments_ready(c) for c in tc):
-            return tc, ev.data.id  # id == run_id
+            return tc, ev.data.id
 
     return None
 
 
-def _follow_stream_after_tools(
-    run_id: str,
-    calls: Sequence[Any],
-    q: queue.Queue,
-    tid: str
-) -> None:
+def _follow_stream_after_tools(run_id: str, calls: Sequence[Any],
+                               q: queue.Queue, tid: str) -> None:
     """
     Execute completed tools, then continue streaming.
     """
     outs = [
         {"tool_call_id": c.id, "output": _run_tool(c)}
-        for c in calls
-        if _arguments_ready(c)
+        for c in calls if _arguments_ready(c)
     ]
     if not outs:
-        # Nothing ready yet — continue without submitting anything.
         return
     follow = client.beta.threads.runs.submit_tool_outputs(
-        thread_id=tid,
-        run_id=run_id,
-        tool_outputs=outs,
-        stream=True,
+        thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
     )
     pipe_events(follow, q, tid)  # recurse
 
 
 def pipe_events(events, q: queue.Queue, tid: str) -> None:
     """
-    Recursively pipe an event stream into a queue, handling tool calls.
+    Recursively pipe an event stream into the queue, handling tool calls.
     """
     run_id: str | None = None
 
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        # Track run_id as soon as it becomes available
+        # Track run_id
         if ev.event == "thread.run.created":
             run_id = ev.data.id
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
@@ -440,7 +441,7 @@ def pipe_events(events, q: queue.Queue, tid: str) -> None:
                 if part.type == "text":
                     q.put(part.text.value)
 
-        # 2) Tool calls (when arguments are ready)
+        # 2) Tool calls
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
@@ -477,11 +478,7 @@ def chat_stream():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-    client.beta.threads.messages.create(
-        thread_id=tid,
-        role="user",
-        content=user_msg
-    )
+    tid = _safe_add_user_message(tid, user_msg)
 
     q: queue.Queue[str | None] = queue.Queue()
 
