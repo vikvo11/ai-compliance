@@ -92,17 +92,32 @@ def _run_tool(name: str, args: str) -> str:
     fn = DISPATCH.get(name); res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
-# ─── helper: выполнить функцию и продолжить поток ────────────
+# ─── helper: выполнить функцию и стримить дальше ─────────────
 def _finish_tool(resp_id: str, tc_id: str, name: str, args_json: str,
                  q: queue.Queue[str | None]) -> str:
-    log.info("RUN  tool=%s  id=%s  args=%s", name, tc_id, args_json)
+    log.info("RUN tool=%s id=%s args=%s", name, tc_id, args_json)
     out = _run_tool(name, args_json)
-    follow = client.responses.submit_tool_outputs(
+
+    # ==== универсальный submit ==================================
+    if hasattr(client.responses, "actions"):                 # новые SDK (≥1.50)
+        submit = client.responses.actions.submit_tool_outputs
+    elif hasattr(client.responses, "submit_tool_outputs"):   # старые (≈1.3-1.4)
+        submit = client.responses.submit_tool_outputs
+    else:                                                    # совсем старые
+        def submit(response_id, tool_outputs, stream):
+            return client.post(
+                f"/v1/responses/{response_id}/actions/submit_tool_outputs",
+                body={"tool_outputs": tool_outputs},
+                stream=stream,
+            )
+    # ===========================================================
+
+    follow = submit(
         response_id=resp_id,
         tool_outputs=[{"tool_call_id": tc_id, "output": out}],
         stream=True,
     )
-    return _pipe(follow, q)      # рекурсивно продолжаем стрим
+    return _pipe(follow, q)
 
 
 # ─── основной парсер потока ──────────────────────────────────
