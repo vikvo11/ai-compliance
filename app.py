@@ -36,11 +36,13 @@ from flask_sqlalchemy import SQLAlchemy
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
+                         fallback=os.getenv("OPENAI_API_KEY"))
 MODEL: Optional[str] = (
     cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "")).strip() or None
 )
-ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id", fallback=os.getenv("ASSISTANT_ID", "")).strip()
+ASSISTANT_ID: str = cfg.get("DEFAULT", "assistant_id",
+                            fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
 if not OPENAI_API_KEY:
     sys.exit("❌  OPENAI_API_KEY is not configured.")
@@ -90,7 +92,7 @@ with app.app_context():
 # ──────────────────────────────────────────────────────────────────────────────
 # 2.  ASSISTANT TOOLS
 # ──────────────────────────────────────────────────────────────────────────────
-def get_current_weather(location: str, unit: str = "celsius") -> str:
+def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D401
     """Return a short string with the current weather for the location."""
     try:
         print(f"[DEBUG] get_current_weather({location=}, {unit=})")
@@ -188,13 +190,10 @@ def _run_tool(c: Any) -> str:
 
 
 def _wait_for_active_run(tid: str, timeout: float = 30.0) -> None:
-    """
-    Block until the last run in the thread is finished or timeout is reached.
-    Raises RuntimeError on timeout.
-    """
+    """Block until the last run in the thread is finished or timeout is reached."""
     done = {"completed", "failed", "cancelled", "expired"}
     runs = client.beta.threads.runs.list(thread_id=tid, limit=1)
-    if not runs.data:  # no runs yet → nothing to wait for
+    if not runs.data:
         return
 
     run = runs.data[0]
@@ -302,12 +301,10 @@ def chat_sync():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-
-    # Wait until previous run (if any) is done
     try:
         _wait_for_active_run(tid)
     except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 429  # Too Many Requests
+        return jsonify({"error": str(exc)}), 429
 
     client.beta.threads.messages.create(thread_id=tid, role="user", content=user_msg)
 
@@ -342,7 +339,7 @@ def chat_sync():
 # 6.  STREAMING CHAT  (/chat/stream)
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any) -> list[Any] | None:
-    """Extract a list of tool_calls from any known event structure."""
+    """Return tool_calls if present; otherwise None."""
     delta = getattr(ev.data, "delta", None)
     if delta and getattr(delta, "tool_calls", None):
         return delta.tool_calls
@@ -364,7 +361,7 @@ def _extract_tool_calls(ev: Any) -> list[Any] | None:
 def _follow_stream_after_tools(
     run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str
 ) -> None:
-    """Execute tool calls and stream the continuation of the run."""
+    """Execute tool calls and continue streaming the run."""
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
@@ -372,23 +369,23 @@ def _follow_stream_after_tools(
         tool_outputs=outs,
         stream=True,
     )
-    pipe_events(follow, q, tid, run_id)  # recurse with same run_id
+    pipe_events(follow, q, tid, run_id)  # recurse
 
 
 def pipe_events(events, q: queue.Queue, tid: str, run_id: str) -> None:
-    """Iterate (recursively) over events, pushing text chunks into the queue."""
+    """Iterate over events, pushing text chunks into the queue."""
     for ev in events:
         print("[EVENT]", ev.event, flush=True)
 
-        if ev.event == "thread.message.delta":  # text delta
+        if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
 
-        elif (tcs := _extract_tool_calls(ev)) is not None:  # tool calls
+        elif (tcs := _extract_tool_calls(ev)) is not None:
             _follow_stream_after_tools(run_id, tcs, q, tid)
 
-        elif ev.event == "thread.run.completed":  # end of run
+        elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
@@ -418,8 +415,6 @@ def chat_stream():
         return jsonify({"error": "Empty message"}), 400
 
     tid = ensure_thread()
-
-    # Wait until previous run (if any) is done
     try:
         _wait_for_active_run(tid)
     except RuntimeError as exc:
@@ -437,7 +432,7 @@ def chat_stream():
             stream=True,
             **({"model": MODEL} if MODEL else {}),
         )
-        pipe_events(first, q, tid, first.id)  # pass known run_id
+        pipe_events(first, q, tid, first.id)
         print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
