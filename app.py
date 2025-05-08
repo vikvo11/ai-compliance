@@ -66,6 +66,7 @@ with app.app_context():
 # 2.  ASSISTANT TOOLS
 # ──────────────────────────────────────────────────────────────────────────────
 def get_current_weather(location: str, unit: str = "celsius") -> str:
+    """Short weather string via Open-Meteo."""
     try:
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
@@ -135,12 +136,6 @@ TOOLS = [
 # ──────────────────────────────────────────────────────────────────────────────
 # 3.  HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
-def ensure_thread() -> str:
-    if "thread_id" not in session:
-        session["thread_id"] = client.beta.threads.create().id
-    return session["thread_id"]
-
-
 def _run_tool(c: Any) -> str:
     args = json.loads(c.function.arguments)
     if c.function.name == "get_current_weather":
@@ -148,6 +143,25 @@ def _run_tool(c: Any) -> str:
     if c.function.name == "get_invoice_by_id":
         return json.dumps(get_invoice_by_id(**args))
     return f"Unknown tool {c.function.name}"
+
+
+def wait_for_last_run(tid: str, poll: float = 0.35) -> None:
+    """Block until the most recent run in a thread is finished."""
+    while True:
+        lst = client.beta.threads.runs.list(thread_id=tid, order="desc", limit=1)
+        if not lst.data:
+            return
+        st = lst.data[0].status
+        if st in {"completed", "failed", "cancelled", "expired"}:
+            return
+        time.sleep(poll)
+
+
+def ensure_thread() -> str:
+    """Return a thread id, creating one if needed."""
+    if "thread_id" not in session:
+        session["thread_id"] = client.beta.threads.create().id
+    return session["thread_id"]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4.  ROUTES (index / CRUD / export)
@@ -199,11 +213,7 @@ def edit_invoice(iid: int):
     inv.status = request.form["status"]
     inv.client.email = request.form["client_email"]
     db.session.commit()
-    return jsonify(
-        {k: v for k, v in _run_tool(
-            type("T", (), {"function": type("F", (), {"name": "get_invoice_by_id"}), "function.arguments": json.dumps({"invoice_id": inv.invoice_id})})
-        ).items() if k != "error"}
-    )
+    return jsonify(get_invoice_by_id(inv.invoice_id))
 
 
 @app.route("/export")
@@ -238,6 +248,7 @@ def chat_sync():
         return jsonify({"error": "Empty"}), 400
 
     tid = ensure_thread()
+    wait_for_last_run(tid)                               # ← NEW
     client.beta.threads.messages.create(thread_id=tid, role="user", content=msg)
 
     run = client.beta.threads.runs.create(
@@ -247,48 +258,38 @@ def chat_sync():
     while True:
         st = client.beta.threads.runs.retrieve(thread_id=tid, run_id=run.id)
         if st.status == "requires_action":
-            calls = st.required_action.submit_tool_outputs.tool_calls
-            outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
-            client.beta.threads.runs.submit_tool_outputs(thread_id=tid, run_id=run.id, tool_outputs=outs)
+            outs = [{"tool_call_id": c.id, "output": _run_tool(c)}
+                    for c in st.required_action.submit_tool_outputs.tool_calls]
+            client.beta.threads.runs.submit_tool_outputs(
+                thread_id=tid, run_id=run.id, tool_outputs=outs
+            )
         elif st.status == "completed":
             break
         elif st.status in {"failed", "cancelled", "expired"}:
             return jsonify({"error": f"Run {st.status}"}), 500
         time.sleep(0.3)
 
-    last = next(
-        m for m in client.beta.threads.messages.list(thread_id=tid, order="desc").data if m.role == "assistant"
-    )
+    last = next(m for m in client.beta.threads.messages.list(thread_id=tid, order="desc").data
+                if m.role == "assistant")
     return jsonify({"response": last.content[0].text.value})
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  STREAMING CHAT  (/chat/stream) – for SDK 1.19
+# 6.  STREAMING CHAT  (/chat/stream) – SDK 1.19
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any) -> tuple[list[Any], str] | None:
-    """
-    Return (tool_calls, run_id) for any SDK-1.19 event shape, else None.
-    """
-    # A) step.delta
     delta = getattr(ev.data, "delta", None)
     if delta and (tc := getattr(delta, "tool_calls", None)):
         return tc, ev.data.run_id
-
-    # B) step.created / in_progress
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
         return step.tool_calls, step.run_id
-
-    # C) requires_action
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         return ra.submit_tool_outputs.tool_calls, ev.data.id
     return None
 
 
-def _continue_after_tools(tid: str,
-                          run_id: str,
-                          calls: Sequence[Any],
-                          q: queue.Queue) -> None:
+def _continue_after_tools(tid: str, run_id: str, calls: Sequence[Any], q: queue.Queue) -> None:
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     cont = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
@@ -298,33 +299,29 @@ def _continue_after_tools(tid: str,
 
 def _pipe_events(events, q: queue.Queue, tid: str) -> None:
     for ev in events:
-        print("[EVENT]", ev.event, flush=True)
-
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
-
         elif (tc := _extract_tool_calls(ev)) is not None:
             calls, rid = tc
             _continue_after_tools(tid, rid, calls, q)
-
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
 
 def _sse(q: queue.Queue) -> Generator[bytes, None, None]:
-    heartbeat = time.time() + 20
+    keep = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
             if tok is None:
                 yield b"event: done\ndata: [DONE]\n\n"; break
-            yield f"data: {tok}\n\n".encode(); heartbeat = time.time() + 20
+            yield f"data: {tok}\n\n".encode(); keep = time.time() + 20
         except queue.Empty:
-            if time.time() > heartbeat:
-                yield b": keep-alive\n\n"; heartbeat = time.time() + 20
+            if time.time() > keep:
+                yield b": keep-alive\n\n"; keep = time.time() + 20
 
 
 @app.route("/chat/stream", methods=["POST"])
@@ -334,6 +331,7 @@ def chat_stream():
         return jsonify({"error": "Empty"}), 400
 
     tid = ensure_thread()
+    wait_for_last_run(tid)                               # ← NEW
     client.beta.threads.messages.create(thread_id=tid, role="user", content=msg)
 
     q: queue.Queue[str | None] = queue.Queue()
