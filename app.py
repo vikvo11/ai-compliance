@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Responses API (function-calling, optional streaming)
-# All comments *must* remain in English – per user request
+# All comments remain in English – per user request
 from __future__ import annotations
 
 import os
@@ -16,12 +16,12 @@ import threading
 from collections.abc import Generator
 from typing import Any, Optional
 
-import httpx                      # fast HTTP client, async–friendly
+import httpx                      # fast HTTP client, async-friendly
 import pandas as pd
 import openai                     # ≥ 1.26.0 (required for Responses API)
 from flask import (
     Flask, Response, flash, jsonify, redirect,
-    render_template, request, session
+    render_template, request, session, copy_current_request_context
 )
 from flask_sqlalchemy import SQLAlchemy
 import configparser
@@ -53,7 +53,6 @@ if not OPENAI_API_KEY:
     log.critical("❌  OPENAI_API_KEY is not configured.")
     sys.exit(1)
 
-# New SDK object – no Assistants beta namespaces any more
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, API=Responses)", MODEL)
 
@@ -94,7 +93,7 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  TOOL DEFINITIONS (identical JSON-schema as before)
+# 3.  TOOL DEFINITIONS
 # ──────────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0)
 
@@ -179,18 +178,15 @@ TOOLS = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4.  RESPONSES API HELPERS
+# 4.  RESPONSES-API HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def _call_local_tool(call: Any) -> str:
-    """
-    Execute the requested function *call* (from Responses-API output item)
-    and return *stringified* result.
-    """
+    """Execute requested function and return stringified result."""
     fn_name: str = call.name
     try:
         args = json.loads(call.arguments or "{}")
     except json.JSONDecodeError as exc:
-        return f"⛔ invalid JSON in arguments: {exc}"
+        return f"⛔ invalid JSON: {exc}"
 
     try:
         if fn_name == "get_current_weather":
@@ -204,21 +200,18 @@ def _call_local_tool(call: Any) -> str:
 
 
 def _sse_stream(tokens: queue.Queue[str | None]) -> Generator[bytes, None, None]:
-    """
-    Convert pushed tokens into a Server-Sent Events stream.
-    Push `None` → terminator.
-    """
+    """Convert pushed tokens into Server-Sent-Events."""
     keepalive = time.time() + 20
     while True:
         try:
             tok = tokens.get(timeout=1)
-            if tok is None:                       # graceful end
+            if tok is None:
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
             yield f"data: {tok}\n\n".encode()
             keepalive = time.time() + 20
         except queue.Empty:
-            if time.time() > keepalive:           # SSE heartbeat
+            if time.time() > keepalive:
                 yield b": keep-alive\n\n"
                 keepalive = time.time() + 20
 
@@ -228,15 +221,12 @@ def _final_stream_to_queue(resp_stream, q: queue.Queue):
     for ev in resp_stream:
         if ev.type == "response.text.delta":
             q.put(ev.delta)
-    q.put(None)                                   # close
+    q.put(None)
 
 
 def _chat_round(user_msg: str,
                 prev_resp_id: Optional[str]) -> tuple[openai.types.Response, list[dict]]:
-    """
-    Run one synchronous Responses-API request (non-streaming) to detect
-    any function calls. Returns `(response, function_call_output_items)`.
-    """
+    """Single non-streaming round to capture any tool calls."""
     response = client.responses.create(
         model=MODEL,
         input=[{"role": "user", "content": user_msg}],
@@ -245,45 +235,38 @@ def _chat_round(user_msg: str,
         stream=False,
     )
 
-    outputs_for_tools: list[dict] = []
-
+    tool_outputs: list[dict] = []
     for item in response.output or []:
         if item.type == "function_call":
-            # Execute locally:
-            output_str = _call_local_tool(item)
-            outputs_for_tools.append(
+            tool_outputs.append(
                 {
                     "type": "function_call_output",
                     "call_id": item.call_id,
-                    "output": output_str,
+                    "output": _call_local_tool(item),
                 }
             )
-    return response, outputs_for_tools
+    return response, tool_outputs
 
 
-def _chat_until_no_tools(user_msg: str) -> openai.types.Response:
+def _chat_until_no_tools(user_msg: str) -> openai.types.Stream:
     """
-    Loop until the model stops requesting tool calls.
-    Uses synchronous calls for the tool loop,
-    then performs a *single* streaming call for the final answer.
+    Resolve all requested tool calls (loop, non-streaming),
+    then open one streaming call for the final answer.
     """
-    prev_id: Optional[str] = session.get("prev_response_id")
-    first_response, tool_outputs = _chat_round(user_msg, prev_id)
+    prev_id = session.get("prev_response_id")
+    response, tool_outputs = _chat_round(user_msg, prev_id)
 
-    # Keep resolving tool calls until NONE are produced
     while tool_outputs:
         log.info("LLM requested %d tool call(s)", len(tool_outputs))
-        # Send tool outputs back – no streaming (tool calls may repeat)
-        follow_up = client.responses.create(
+        response = client.responses.create(
             model=MODEL,
             input=tool_outputs,
-            previous_response_id=first_response.id,
+            previous_response_id=response.id,
             tools=TOOLS,
             stream=False,
         )
-        first_response = follow_up
         tool_outputs = []
-        for item in follow_up.output or []:
+        for item in response.output or []:
             if item.type == "function_call":
                 tool_outputs.append(
                     {
@@ -293,16 +276,13 @@ def _chat_until_no_tools(user_msg: str) -> openai.types.Response:
                     }
                 )
 
-    # When no more tool calls → final user-visible answer
-    final_stream = client.responses.create(
+    stream = client.responses.create(
         model=MODEL,
-        previous_response_id=first_response.id,
+        previous_response_id=response.id,
         stream=True,
     )
-    # Cache conversation state server-side (so next turn gets context)
-    session["prev_response_id"] = first_response.id
-    return final_stream
-
+    session["prev_response_id"] = response.id
+    return stream
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5.  CHAT ENDPOINT (Responses API + SSE)
@@ -315,6 +295,7 @@ def chat_stream():
 
     q: queue.Queue[str | None] = queue.Queue()
 
+    @copy_current_request_context          # preserves request/session inside thread
     def worker():
         try:
             stream = _chat_until_no_tools(user_msg)
@@ -418,8 +399,10 @@ def export_invoice(invoice_id: Optional[int] = None):
     return (
         csv_data,
         200,
-        {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename="{fname}"'},
+        {
+            "Content-Type": "text/csv",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        },
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
