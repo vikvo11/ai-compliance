@@ -95,7 +95,6 @@ with app.app_context():
 def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D401
     """Return a short string with the current weather for the location."""
     try:
-        print(f"[DEBUG] get_current_weather({location=}, {unit=})")
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": location, "count": 1},
@@ -119,7 +118,6 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:  # noqa: D
 
 def get_invoice_by_id(invoice_id: str) -> dict:
     """Look up an invoice in the database and return a JSON-serialisable dict."""
-    print(f"[DEBUG] get_invoice_by_id({invoice_id=})")
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
@@ -172,7 +170,6 @@ def ensure_thread() -> str:
     """Return a thread ID stored in the Flask session, creating one if needed."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
-        print(f"[DEBUG] Created new thread ID: {session['thread_id']}")
     return session["thread_id"]
 
 
@@ -188,20 +185,15 @@ def _run_tool(c: Any) -> str:
 
 
 def _wait_until_no_active_runs(tid: str, timeout: float = 60.0) -> None:
-    """
-    Block until the thread has **no** active runs.
-    A run is active if its status not in {completed, failed, cancelled, expired}.
-    """
+    """Block until the thread has no active runs."""
     done = {"completed", "failed", "cancelled", "expired"}
     end_at = time.time() + timeout
-
     while True:
         runs = client.beta.threads.runs.list(thread_id=tid, limit=20).data
-        active = [r for r in runs if r.status not in done]
-        if not active:
+        if all(r.status in done for r in runs):
             return
         if time.time() > end_at:
-            ids = ", ".join(r.id for r in active)
+            ids = ", ".join(r.id for r in runs if r.status not in done)
             raise RuntimeError(f"Thread still has active runs: {ids}")
         time.sleep(0.35)
 
@@ -220,7 +212,8 @@ def index():
         for _, row in df.iterrows():
             cl = Client.query.filter_by(name=row["client_name"]).first()
             if not cl:
-                cl = Client(name=row["client_name"], email=row.get("client_email") or "")
+                cl = Client(name=row["client_name"],
+                            email=row.get("client_email") or "")
                 db.session.add(cl)
                 db.session.flush()
             db.session.add(
@@ -235,7 +228,6 @@ def index():
         db.session.commit()
         flash("Invoices uploaded successfully.")
         return redirect("/")
-
     return render_template("index.html", invoices=Invoice.query.all())
 
 
@@ -284,7 +276,6 @@ def export_invoice(invoice_id: int | None = None):
             for r in rows
         ]
     ).to_csv(index=False)
-
     fname = f"invoice_{invoice_id or 'all'}.csv"
     return csv_data, 200, {
         "Content-Type": "text/csv",
@@ -296,7 +287,6 @@ def export_invoice(invoice_id: int | None = None):
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/chat", methods=["POST"])
 def chat_sync():
-    """Blocking (synchronous) chat endpoint."""
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
@@ -340,19 +330,15 @@ def chat_sync():
 # 6.  STREAMING CHAT  (/chat/stream)
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any) -> list[Any] | None:
-    """Return tool_calls if present; otherwise None."""
     delta = getattr(ev.data, "delta", None)
     if delta and getattr(delta, "tool_calls", None):
         return delta.tool_calls
-
     sd = getattr(delta, "step_details", None)
     if sd and getattr(sd, "tool_calls", None):
         return sd.tool_calls
-
     step = getattr(ev.data, "step", None)
     if step and getattr(step, "tool_calls", None):
         return step.tool_calls
-
     ra = getattr(ev.data, "required_action", None)
     if ra and getattr(ra, "submit_tool_outputs", None):
         return ra.submit_tool_outputs.tool_calls
@@ -362,7 +348,6 @@ def _extract_tool_calls(ev: Any) -> list[Any] | None:
 def _follow_stream_after_tools(
     run_id: str, calls: Sequence[Any], q: queue.Queue, tid: str
 ) -> None:
-    """Execute tool calls and continue streaming the run."""
     outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls]
     follow = client.beta.threads.runs.submit_tool_outputs(
         thread_id=tid,
@@ -370,29 +355,23 @@ def _follow_stream_after_tools(
         tool_outputs=outs,
         stream=True,
     )
-    pipe_events(follow, q, tid, run_id)  # recurse
+    pipe_events(follow, q, tid, run_id)
 
 
 def pipe_events(events, q: queue.Queue, tid: str, run_id: str) -> None:
-    """Iterate over events, pushing text chunks into the queue."""
     for ev in events:
-        print("[EVENT]", ev.event, flush=True)
-
         if ev.event == "thread.message.delta":
             for part in (ev.data.delta.content or []):
                 if part.type == "text":
                     q.put(part.text.value)
-
         elif (tcs := _extract_tool_calls(ev)) is not None:
             _follow_stream_after_tools(run_id, tcs, q, tid)
-
         elif ev.event == "thread.run.completed":
             q.put(None)
             return
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
-    """Yield Server-Sent Events; send heartbeat every 20 s."""
     heartbeat_at = time.time() + 20
     while True:
         try:
@@ -410,7 +389,6 @@ def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """Streaming chat endpoint (SSE)."""
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
@@ -425,25 +403,15 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume():
-        print("[DEBUG] consume() started", flush=True)
-
-        # 1️⃣ create run (no streaming) → get run.id
         run = client.beta.threads.runs.create(
             thread_id=tid,
             assistant_id=ASSISTANT_ID,
             tools=TOOLS,
             **({"model": MODEL} if MODEL else {}),
         )
-
-        # 2️⃣ open stream on that run
-        events = client.beta.threads.runs.retrieve(
-            thread_id=tid,
-            run_id=run.id,
-            stream=True,
-        )
-
+        # NEW SDK: streaming via .stream(...)
+        events = client.beta.threads.runs.stream(thread_id=tid, run_id=run.id)
         pipe_events(events, q, tid, run.id)
-        print("[DEBUG] consume() finished", flush=True)
 
     threading.Thread(target=consume, daemon=True).start()
 
