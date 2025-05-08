@@ -4,14 +4,7 @@
 # All comments in English as requested
 from __future__ import annotations
 
-import os
-import sys
-import time
-import json
-import queue
-import threading
-import functools
-import logging
+import os, sys, time, json, queue, threading, functools, logging
 from collections.abc import Generator
 from typing import Any
 
@@ -27,7 +20,7 @@ import openai
 import configparser
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 0.  LOGGING (ISO-8601 → stdout)
+# 0. LOGGING  (ISO-8601 → stdout)
 # ──────────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -39,7 +32,7 @@ logging.basicConfig(
 log = logging.getLogger("app")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1.  ENV & OPENAI
+# 1. ENV & OPENAI
 # ──────────────────────────────────────────────────────────────────────────────
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
@@ -62,7 +55,7 @@ client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  FLASK & DB
+# 2. FLASK & DB
 # ──────────────────────────────────────────────────────────────────────────────
 os.makedirs("/app/data", exist_ok=True)
 
@@ -74,17 +67,14 @@ db = SQLAlchemy(app)
 
 
 class Client(db.Model):
-    __tablename__ = "client"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), unique=True, nullable=False)
     email = db.Column(db.String(128))
-    invoices = db.relationship(
-        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
-    )
+    invoices = db.relationship("Invoice", backref="client", lazy=True,
+                               cascade="all, delete-orphan")
 
 
 class Invoice(db.Model):
-    __tablename__ = "invoice"
     id = db.Column(db.Integer, primary_key=True)
     invoice_id = db.Column(db.String(64), nullable=False)
     amount = db.Column(db.Float, nullable=False)
@@ -98,7 +88,7 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS  (thread-local httpx.Client)
+# 3. ASSISTANT TOOLS  (thread-local httpx.Client)
 # ──────────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = Timeout(6.0)
 HTTP_LIMITS = Limits(max_keepalive_connections=20, max_connections=50)
@@ -122,10 +112,8 @@ def _close_thread_client() -> None:
 def _coords_for(city: str) -> tuple[float, float] | None:
     cli = _get_client()
     t0 = time.perf_counter()
-    resp = cli.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": city, "count": 1},
-    )
+    resp = cli.get("https://geocoding-api.open-meteo.com/v1/search",
+                   params={"name": city, "count": 1})
     try:
         res = resp.json().get("results")
     finally:
@@ -137,10 +125,9 @@ def _coords_for(city: str) -> tuple[float, float] | None:
 def _weather_for(lat: float, lon: float) -> dict:
     cli = _get_client()
     t0 = time.perf_counter()
-    resp = cli.get(
-        "https://api.open-meteo.com/v1/forecast",
-        params={"latitude": lat, "longitude": lon, "current_weather": True},
-    )
+    resp = cli.get("https://api.open-meteo.com/v1/forecast",
+                   params={"latitude": lat, "longitude": lon,
+                           "current_weather": True})
     try:
         data = resp.json().get("current_weather", {})
     finally:
@@ -156,18 +143,18 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
         if not coord:
             return f"Location '{location}' not found."
         cw = _weather_for(*coord)
-        return (
-            f"The temperature in {location} is {cw.get('temperature')} °C "
-            f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
-        )
+        return (f"The temperature in {location} is {cw.get('temperature')} °C "
+                f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}.")
     finally:
-        log.info("tool:get_current_weather('%s') %.3f s", location, time.perf_counter() - t0)
+        log.info("tool:get_current_weather('%s') %.3f s",
+                 location, time.perf_counter() - t0)
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
     t0 = time.perf_counter()
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    log.info("tool:get_invoice_by_id '%s' DB %.3f s", invoice_id, time.perf_counter() - t0)
+    log.info("tool:get_invoice_by_id '%s' DB %.3f s",
+             invoice_id, time.perf_counter() - t0)
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
     return {
@@ -211,7 +198,7 @@ TOOLS = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4.  HELPERS
+# 4. HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
     if "thread_id" not in session:
@@ -222,24 +209,24 @@ def ensure_thread() -> str:
 
 def _safe_add_user_message(tid: str, content: str) -> str:
     try:
-        client.beta.threads.messages.create(thread_id=tid, role="user", content=content)
+        client.beta.threads.messages.create(thread_id=tid,
+                                            role="user",
+                                            content=content)
         return tid
     except openai.BadRequestError as exc:
         if "while a run" not in str(exc):
             raise
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
-        client.beta.threads.messages.create(thread_id=new_tid, role="user", content=content)
+        client.beta.threads.messages.create(thread_id=new_tid,
+                                            role="user",
+                                            content=content)
         log.warning("thread %s locked → new %s", tid, new_tid)
         return new_tid
 
 
 def _run_tool(c: Any) -> str:
-    try:
-        args = json.loads(c.function.arguments or "{}")
-    except json.JSONDecodeError as exc:
-        return f"Invalid JSON: {exc}"
-
+    args = json.loads(c.function.arguments or "{}")
     fn = c.function.name
     t0 = time.perf_counter()
     log.info("▶ tool %s %s", fn, args)
@@ -255,17 +242,21 @@ def _run_tool(c: Any) -> str:
 
 def _arguments_ready(call: Any) -> bool:
     try:
-        return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
+        return json.loads(call.function.arguments or "{}") is not None
     except Exception:
         return False
 
 
 def _tool_call_ready(call: Any) -> bool:
-    return bool(getattr(call, "id", None)) and _arguments_ready(call)
+    return getattr(call, "id", None) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (batch-flush + metrics)
+# 5. STREAMING CHAT (UTF-8-safe batch-flush + metrics)
 # ──────────────────────────────────────────────────────────────────────────────
+BYTE_LIMIT = 1024           # flush when ≥1 KiB
+FLUSH_EVERY = 0.15          # flush at least every 150 ms
+
+
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
     if delta:
@@ -291,12 +282,14 @@ def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     return None
 
 
-def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
-    outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls if _tool_call_ready(c)]
+def _follow_stream_after_tools(run_id, calls, q, tid):
+    outs = [{"tool_call_id": c.id, "output": _run_tool(c)}
+            for c in calls if _tool_call_ready(c)]
     if not outs:
         return
     follow = client.beta.threads.runs.submit_tool_outputs(
-        thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
+        thread_id=tid, run_id=run_id,
+        tool_outputs=outs, stream=True
     )
     pipe_events(follow, q, tid)
 
@@ -308,16 +301,14 @@ def _flush_buf(buf: list[str], q: queue.Queue):
 
 
 def pipe_events(events, q: queue.Queue, tid: str):
-    run_id: str | None = None
+    run_id = None
     t0 = time.perf_counter()
-    run_created_at: float | None = None
-    first_tok: float | None = None
-    done_at: float | None = None
+    run_created_at = first_tok = done_at = None
     n_frag = 0
 
     tok_buf: list[str] = []
-    buf_chars = 0
-    next_flush = time.perf_counter() + 0.10     # flush every 100 ms
+    buf_bytes = 0
+    next_flush = time.perf_counter() + FLUSH_EVERY
 
     for ev in events:
         if ev.event == "thread.run.created":
@@ -329,22 +320,24 @@ def pipe_events(events, q: queue.Queue, tid: str):
 
         if ev.event == "thread.message.delta":
             for part in ev.data.delta.content or []:
-                if part.type == "text":
-                    if first_tok is None:
-                        first_tok = time.perf_counter()
-                        log.info("run %s first-token %.3f s",
-                                 run_id, first_tok - (run_created_at or t0))
-                    n_frag += 1
-                    tok_buf.append(part.text.value)
-                    buf_chars += len(part.text.value)
-                    if buf_chars >= 256 or time.perf_counter() >= next_flush:
-                        _flush_buf(tok_buf, q)
-                        buf_chars = 0
-                        next_flush = time.perf_counter() + 0.10
+                if part.type != "text":
+                    continue
+                if first_tok is None:
+                    first_tok = time.perf_counter()
+                    log.info("run %s first-token %.3f s",
+                             run_id, first_tok - (run_created_at or t0))
+                txt = part.text.value
+                tok_buf.append(txt)
+                buf_bytes += len(txt.encode("utf-8"))
+                n_frag += 1
+                if buf_bytes >= BYTE_LIMIT or time.perf_counter() >= next_flush:
+                    _flush_buf(tok_buf, q)
+                    buf_bytes = 0
+                    next_flush = time.perf_counter() + FLUSH_EVERY
 
-        elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
-            tool_calls, run_id = tc_block
-            _follow_stream_after_tools(run_id, tool_calls, q, tid)
+        elif (tc := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
+            calls, run_id = tc
+            _follow_stream_after_tools(run_id, calls, q, tid)
 
         elif ev.event == "thread.run.completed":
             done_at = time.perf_counter()
@@ -358,15 +351,14 @@ def pipe_events(events, q: queue.Queue, tid: str):
         metrics = {
             "queue_to_run_created": f"{run_created_at - t0:.3f}s",
             "run_created_to_first_token": (
-                f"{first_tok - run_created_at:.3f}s" if first_tok else "n/a"
-            ),
+                f"{first_tok - run_created_at:.3f}s" if first_tok else "n/a"),
             "first_token_to_done": (
-                f"{done_at - first_tok:.3f}s" if first_tok else "n/a"
-            ),
+                f"{done_at - first_tok:.3f}s" if first_tok else "n/a"),
             "overall": f"{done_at - t0:.3f}s",
             "fragments": n_frag,
         }
-        log.info("timing-summary %s %s", run_id, json.dumps(metrics, ensure_ascii=False))
+        log.info("timing-summary %s %s",
+                 run_id, json.dumps(metrics, ensure_ascii=False))
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
@@ -408,15 +400,14 @@ def chat_stream():
                 pipe_events(first, q, tid)
         finally:
             _close_thread_client()
-            log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
+            log.info("chat_stream %.3f s",
+                     time.perf_counter() - overall_t0)
 
     threading.Thread(target=consume, daemon=True).start()
-    return Response(
-        sse_generator(q),
-        mimetype="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
-
+    return Response(sse_generator(q),
+                    mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no",
+                             "Cache-Control": "no-cache"})
 # ──────────────────────────────────────────────────────────────────────────────
 # 6.  CSV / CRUD  (unchanged)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -520,5 +511,5 @@ def export_invoice(invoice_id: int | None = None):
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    log.info("Flask serving on 0.0.0.0:5005  (log-level=%s)", LOG_LEVEL)
+    log.info("Flask serving on 0.0.0.0:5005 (log-level=%s)", LOG_LEVEL)
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
