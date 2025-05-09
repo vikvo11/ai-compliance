@@ -26,6 +26,9 @@ import pandas as pd
 import openai
 import configparser
 
+# NEW: FCC helper
+import fcc_ecfs
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 0.  LOGGING (ISO-8601 → stdout)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -179,6 +182,20 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         "client_email": inv.client.email,
     }
 
+# ───────────── FCC tool wrappers (call fcc_ecfs) ───────────── #
+def fcc_search_filings(company: str) -> list[dict]:
+    """Return numbered list of PDFs for *company*."""
+    return fcc_ecfs.search(company)
+
+
+def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
+    """
+    Download + parse selected FCC PDFs.
+    *indexes* are 1-based numbers from fcc_search_filings.
+    """
+    return fcc_ecfs.get_texts(company, indexes)
+
+# ────────────────────────────────────────────────────────────── #
 
 TOOLS = [
     {
@@ -205,6 +222,41 @@ TOOLS = [
                 "type": "object",
                 "properties": {"invoice_id": {"type": "string"}},
                 "required": ["invoice_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fcc_search_filings",
+            "description": "Search FCC ECFS for all PDF attachments of a company;",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company": {"type": "string",
+                                "description": "Company name to search for"},
+                },
+                "required": ["company"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fcc_get_filings_text",
+            "description": "Download and parse selected FCC ECFS PDFs. "
+                           "Returns mapping '<idx>. <filename>' → text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company": {"type": "string"},
+                    "indexes": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "1-based indexes from fcc_search_filings",
+                    },
+                },
+                "required": ["company", "indexes"],
             },
         },
     },
@@ -248,20 +300,13 @@ def _run_tool(c: Any) -> str:
             return get_current_weather(**args)
         if fn == "get_invoice_by_id":
             return json.dumps(get_invoice_by_id(**args))
+        if fn == "fcc_search_filings":
+            return json.dumps(fcc_search_filings(**args), ensure_ascii=False)
+        if fn == "fcc_get_filings_text":
+            return json.dumps(fcc_get_filings_text(**args), ensure_ascii=False)
         return f"Unknown tool {fn}"
     finally:
         log.info("▲ tool %s done %.3f s", fn, time.perf_counter() - t0)
-
-
-def _arguments_ready(call: Any) -> bool:
-    try:
-        return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
-    except Exception:
-        return False
-
-
-def _tool_call_ready(call: Any) -> bool:
-    return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5.  STREAMING CHAT  (batch-flush + metrics)
