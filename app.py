@@ -26,7 +26,8 @@ import pandas as pd
 import openai
 import configparser
 
-# NEW: FCC helper module (fcc_ecfs.py must be in PYTHONPATH)
+# OPTIONAL: helper for FCC ECFS (must be in PYTHONPATH)
+import fcc_ecfs
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -54,19 +55,18 @@ MODEL = (cfg.get("DEFAULT", "model",
 ASSISTANT_ID = cfg.get("DEFAULT", "assistant_id",
                        fallback=os.getenv("ASSISTANT_ID", "")).strip()
 
-# ----- ➊ NEW: propagate FCC key to environment ------------------------
+# ── optionally propagate FCC API KEY to env so fcc_ecfs sees it ─────────
 FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY",
                   fallback=os.getenv("FCC_API_KEY"))
 if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
-# ----------------------------------------------------------------------
-import fcc_ecfs
+# ────────────────────────────────────────────────────────────────────────
 
 if not OPENAI_API_KEY:
-    log.critical("❌  OPENAI_API_KEY is not configured.")
+    log.critical("❌ OPENAI_API_KEY is not configured.")
     sys.exit(1)
 if not ASSISTANT_ID:
-    log.critical("❌  ASSISTANT_ID is not configured.")
+    log.critical("❌ ASSISTANT_ID is not configured.")
     sys.exit(1)
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
@@ -193,7 +193,7 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         "client_email": inv.client.email,
     }
 
-# ──────────── FCC wrappers (use fcc_ecfs module) ────────────
+
 def fcc_search_filings(company: str) -> list[dict]:
     """Return numbered list of PDFs for company."""
     return fcc_ecfs.search(company)
@@ -203,8 +203,8 @@ def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
     """Download & parse selected FCC PDFs (1-based indexes)."""
     return fcc_ecfs.get_texts(company, indexes)
 
-# ────────────────────────────────────────────────────────────
-TOOLS = [
+# ────────────────────────────────────────────────────────────────────────
+TOOLS = [            # will be merged with assistant.tools at runtime
     {
         "type": "function",
         "function": {
@@ -251,7 +251,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "fcc_get_filings_text",
-            "description": "Download & parse selected FCC ECFS PDFs and return text",
+            "description": "Download & parse selected FCC PDFs and return text",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -269,9 +269,10 @@ TOOLS = [
 ]
 
 # ────────────────────────────────────────────────────────────────────────
-# 4. HELPERS (thread / tool plumbing)
+# 4. HELPERS  (thread + tool plumbing)
 # ────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
+    """Return existing thread_id from cookie or create a new one."""
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
         log.debug("new thread %s", session["thread_id"])
@@ -279,9 +280,10 @@ def ensure_thread() -> str:
 
 
 def _safe_add_user_message(tid: str, content: str) -> str:
+    """Add the user-message; create a new thread if the old is locked."""
     try:
         client.beta.threads.messages.create(
-            thread_id=tid, role="assistant", content=content)
+            thread_id=tid, role="user", content=content)
         return tid
     except openai.BadRequestError as exc:
         if "while a run" not in str(exc):
@@ -289,12 +291,13 @@ def _safe_add_user_message(tid: str, content: str) -> str:
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
         client.beta.threads.messages.create(
-            thread_id=new_tid, role="assistant", content=content)
+            thread_id=new_tid, role="user", content=content)
         log.warning("thread %s locked → new %s", tid, new_tid)
         return new_tid
 
 
 def _run_tool(c: Any) -> str:
+    """Execute one of our Python functions for a tool call."""
     try:
         args = json.loads(c.function.arguments or "{}")
     except json.JSONDecodeError as exc:
@@ -316,7 +319,7 @@ def _run_tool(c: Any) -> str:
     finally:
         log.info("▲ tool %s done %.3f s", fn, time.perf_counter() - t0)
 
-# --- helpers needed by streaming code (MUST be above _extract_tool_calls) ---
+
 def _arguments_ready(call: Any) -> bool:
     try:
         return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
@@ -328,7 +331,7 @@ def _tool_call_ready(call: Any) -> bool:
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ────────────────────────────────────────────────────────────────────────
-# 5. STREAMING CHAT (batch-flush + tool handling)
+# 5. STREAMING CHAT  (flush + tools + Retrieval detection)
 # ────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
@@ -375,6 +378,17 @@ def _flush_buf(buf: list[str], q: queue.Queue):
         buf.clear()
 
 
+def _log_retrieval_usage(run_id: str, tid: str, q: queue.Queue) -> None:
+    """Check run steps for file_search and log/notify."""
+    steps = client.beta.threads.runs.steps.list(thread_id=tid, run_id=run_id).data
+    for st in steps:
+        if st.type == "tool" and getattr(st, "tool", None) and st.tool.type == "file_search":
+            log.info("run %s used Retrieval on files %s", run_id, st.tool.file_ids)
+            q.put("🔍 [file search used]")          # push a small notice to SSE
+            return
+    log.debug("run %s: no file_search step", run_id)
+
+
 def pipe_events(events, q: queue.Queue, tid: str):
     run_id: str | None = None
     t0 = time.perf_counter()
@@ -417,9 +431,10 @@ def pipe_events(events, q: queue.Queue, tid: str):
         elif ev.event == "thread.run.completed":
             done_at = time.perf_counter()
             _flush_buf(tok_buf, q)
+            _log_retrieval_usage(run_id, tid, q)      # ← NEW
             log.info("run %s done (%d frags, %.3f s total)",
                      run_id, n_frag, done_at - t0)
-            q.put(None)
+            q.put(None)                               # terminator for SSE
             break
 
     if run_created_at and done_at:
@@ -469,10 +484,13 @@ def chat_stream():
     def consume() -> None:
         try:
             with app.app_context():
+                # merge assistant.tools (which may include "file_search")
+                assistant = client.beta.assistants.retrieve(ASSISTANT_ID)
+                merged_tools = assistant.tools # + TOOLS
                 first = client.beta.threads.runs.create(
                     thread_id=tid,
                     assistant_id=ASSISTANT_ID,
-                    #tools=TOOLS,
+                    tools=merged_tools,          # includes Retrieval!
                     stream=True,
                     **({"model": MODEL} if MODEL else {}),
                 )
@@ -492,7 +510,7 @@ def chat_stream():
     )
 
 # ────────────────────────────────────────────────────────────────────────
-# 6. CSV / CRUD (unchanged from your version)
+# 6. CSV / CRUD
 # ────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
