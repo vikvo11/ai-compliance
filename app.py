@@ -10,13 +10,13 @@ import time
 import json
 import queue
 import threading
-import asyncio
 import functools
 import logging
-from collections.abc import Sequence, Generator
-from typing import Any, Optional
+from collections.abc import Generator
+from typing import Any
 
-import httpx                     # faster HTTP client, async-friendly
+import httpx
+from httpx import Limits, Timeout
 from flask import (
     Flask, render_template, request, redirect,
     flash, jsonify, session, Response
@@ -98,33 +98,55 @@ with app.app_context():
 log.info("DB ready")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS (cached + async)
+# 3.  ASSISTANT TOOLS  (thread-local httpx.Client)
 # ──────────────────────────────────────────────────────────────────────────────
-HTTP_TIMEOUT = httpx.Timeout(6.0)
+HTTP_TIMEOUT = Timeout(6.0)
+HTTP_LIMITS = Limits(max_keepalive_connections=20, max_connections=50)
+_tls = threading.local()
+
+
+def _get_client() -> httpx.Client:
+    if not hasattr(_tls, "client"):
+        _tls.client = httpx.Client(timeout=HTTP_TIMEOUT, limits=HTTP_LIMITS)
+    return _tls.client
+
+
+def _close_thread_client() -> None:
+    cli = getattr(_tls, "client", None)
+    if cli:
+        cli.close()
+        delattr(_tls, "client")
 
 
 @functools.lru_cache(maxsize=2048)
 def _coords_for(city: str) -> tuple[float, float] | None:
+    cli = _get_client()
     t0 = time.perf_counter()
-    resp = httpx.get(
+    resp = cli.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": city, "count": 1},
-        timeout=HTTP_TIMEOUT,
     )
-    res = resp.json().get("results")
+    try:
+        res = resp.json().get("results")
+    finally:
+        resp.close()
     log.debug("geocode '%s' %.3f s", city, time.perf_counter() - t0)
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
-async def _weather_for(lat: float, lon: float) -> dict:
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
-        t0 = time.perf_counter()
-        resp = await ac.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
-        )
+def _weather_for(lat: float, lon: float) -> dict:
+    cli = _get_client()
+    t0 = time.perf_counter()
+    resp = cli.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={"latitude": lat, "longitude": lon, "current_weather": True},
+    )
+    try:
+        data = resp.json().get("current_weather", {})
+    finally:
+        resp.close()
     log.debug("weather API %.3f s", time.perf_counter() - t0)
-    return resp.json().get("current_weather", {})
+    return data
 
 
 def get_current_weather(location: str, unit: str = "celsius") -> str:
@@ -133,7 +155,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
         coord = _coords_for(location)
         if not coord:
             return f"Location '{location}' not found."
-        cw = asyncio.run(_weather_for(*coord))
+        cw = _weather_for(*coord)
         return (
             f"The temperature in {location} is {cw.get('temperature')} °C "
             f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
@@ -242,7 +264,7 @@ def _tool_call_ready(call: Any) -> bool:
     return bool(getattr(call, "id", None)) and _arguments_ready(call)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (detailed timing)
+# 5.  STREAMING CHAT  (batch-flush + metrics)
 # ──────────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
@@ -279,15 +301,28 @@ def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
     pipe_events(follow, q, tid)
 
 
+def _flush_buf(buf: list[str], q: queue.Queue):
+    if buf:
+        q.put("".join(buf))
+        buf.clear()
+
+
 def pipe_events(events, q: queue.Queue, tid: str):
     run_id: str | None = None
     t0 = time.perf_counter()
+    run_created_at: float | None = None
     first_tok: float | None = None
+    done_at: float | None = None
     n_frag = 0
+
+    tok_buf: list[str] = []
+    buf_chars = 0
+    next_flush = time.perf_counter() + 0.10     # flush every 100 ms
 
     for ev in events:
         if ev.event == "thread.run.created":
             run_id = ev.data.id
+            run_created_at = time.perf_counter()
             log.info("run %s created", run_id)
         elif ev.event.startswith("thread.run.step.") and hasattr(ev.data, "run_id"):
             run_id = ev.data.run_id
@@ -297,18 +332,41 @@ def pipe_events(events, q: queue.Queue, tid: str):
                 if part.type == "text":
                     if first_tok is None:
                         first_tok = time.perf_counter()
-                        log.info("run %s first-token %.3f s", run_id, first_tok - t0)
+                        log.info("run %s first-token %.3f s",
+                                 run_id, first_tok - (run_created_at or t0))
                     n_frag += 1
-                    q.put(part.text.value)
+                    tok_buf.append(part.text.value)
+                    buf_chars += len(part.text.value)
+                    if buf_chars >= 256 or time.perf_counter() >= next_flush:
+                        _flush_buf(tok_buf, q)
+                        buf_chars = 0
+                        next_flush = time.perf_counter() + 0.10
 
         elif (tc_block := _extract_tool_calls(ev, run_id_hint=run_id)) is not None:
             tool_calls, run_id = tc_block
             _follow_stream_after_tools(run_id, tool_calls, q, tid)
 
         elif ev.event == "thread.run.completed":
-            log.info("run %s done (%d frags, %.3f s total)", run_id, n_frag, time.perf_counter() - t0)
+            done_at = time.perf_counter()
+            _flush_buf(tok_buf, q)
+            log.info("run %s done (%d frags, %.3f s total)",
+                     run_id, n_frag, done_at - t0)
             q.put(None)
-            return
+            break
+
+    if run_created_at and done_at:
+        metrics = {
+            "queue_to_run_created": f"{run_created_at - t0:.3f}s",
+            "run_created_to_first_token": (
+                f"{first_tok - run_created_at:.3f}s" if first_tok else "n/a"
+            ),
+            "first_token_to_done": (
+                f"{done_at - first_tok:.3f}s" if first_tok else "n/a"
+            ),
+            "overall": f"{done_at - t0:.3f}s",
+            "fragments": n_frag,
+        }
+        log.info("timing-summary %s %s", run_id, json.dumps(metrics, ensure_ascii=False))
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
@@ -340,14 +398,17 @@ def chat_stream():
     q: queue.Queue[str | None] = queue.Queue()
 
     def consume() -> None:
-        with app.app_context():
-            first = client.beta.threads.runs.create(
-                thread_id=tid, assistant_id=ASSISTANT_ID,
-                tools=TOOLS, stream=True,
-                **({"model": MODEL} if MODEL else {}),
-            )
-            pipe_events(first, q, tid)
-        log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
+        try:
+            with app.app_context():
+                first = client.beta.threads.runs.create(
+                    thread_id=tid, assistant_id=ASSISTANT_ID,
+                    tools=TOOLS, stream=True,
+                    **({"model": MODEL} if MODEL else {}),
+                )
+                pipe_events(first, q, tid)
+        finally:
+            _close_thread_client()
+            log.info("chat_stream %.3f s", time.perf_counter() - overall_t0)
 
     threading.Thread(target=consume, daemon=True).start()
     return Response(
@@ -357,7 +418,7 @@ def chat_stream():
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6.  CSV / CRUD  (with logs)
+# 6.  CSV / CRUD  (unchanged)
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
