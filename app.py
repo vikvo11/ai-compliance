@@ -27,7 +27,7 @@ import openai
 import configparser
 
 # NEW: FCC helper module (fcc_ecfs.py must be in PYTHONPATH)
-import fcc_ecfs
+
 
 # ────────────────────────────────────────────────────────────────────────
 # 0. LOGGING
@@ -53,6 +53,14 @@ MODEL = (cfg.get("DEFAULT", "model",
                  fallback=os.getenv("OPENAI_MODEL", "")).strip() or None)
 ASSISTANT_ID = cfg.get("DEFAULT", "assistant_id",
                        fallback=os.getenv("ASSISTANT_ID", "")).strip()
+
+# ----- ➊ NEW: propagate FCC key to environment ------------------------
+FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY",
+                  fallback=os.getenv("FCC_API_KEY"))
+if FCC_KEY:
+    os.environ["FCC_API_KEY"] = FCC_KEY
+# ----------------------------------------------------------------------
+import fcc_ecfs
 
 if not OPENAI_API_KEY:
     log.critical("❌  OPENAI_API_KEY is not configured.")
