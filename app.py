@@ -490,7 +490,8 @@ def chat_stream():
                 first = client.beta.threads.runs.create(
                     thread_id=tid,
                     assistant_id=ASSISTANT_ID,
-                    tools=merged_tools,          # includes Retrieval!
+                    #tools=merged_tools,          # includes Retrieval!
+                    tools=TOOLS,
                     stream=True,
                     **({"model": MODEL} if MODEL else {}),
                 )
