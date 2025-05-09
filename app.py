@@ -26,12 +26,12 @@ import pandas as pd
 import openai
 import configparser
 
-# NEW: FCC helper
+# NEW: FCC helper module (fcc_ecfs.py must be in PYTHONPATH)
 import fcc_ecfs
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 0.  LOGGING (ISO-8601 → stdout)
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 0. LOGGING
+# ────────────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -41,9 +41,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("app")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1.  ENV & OPENAI
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 1. ENV & OPENAI
+# ────────────────────────────────────────────────────────────────────────
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
@@ -62,11 +62,12 @@ if not ASSISTANT_ID:
     sys.exit(1)
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
-log.info("OpenAI client ready (model=%s, assistant=%s)", MODEL or "(default)", ASSISTANT_ID)
+log.info("OpenAI client ready (model=%s, assistant=%s)",
+         MODEL or "(default)", ASSISTANT_ID)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2.  FLASK & DB
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 2. FLASK & DB
+# ────────────────────────────────────────────────────────────────────────
 os.makedirs("/app/data", exist_ok=True)
 
 app = Flask(__name__)
@@ -100,9 +101,9 @@ with app.app_context():
     db.create_all()
 log.info("DB ready")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  ASSISTANT TOOLS  (thread-local httpx.Client)
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 3. ASSISTANT TOOLS  (thread-local httpx.Client)
+# ────────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = Timeout(6.0)
 HTTP_LIMITS = Limits(max_keepalive_connections=20, max_connections=50)
 _tls = threading.local()
@@ -164,13 +165,15 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
             f"with wind {cw.get('windspeed')} m/s at {cw.get('time')}."
         )
     finally:
-        log.info("tool:get_current_weather('%s') %.3f s", location, time.perf_counter() - t0)
+        log.info("tool:get_current_weather('%s') %.3f s",
+                 location, time.perf_counter() - t0)
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
     t0 = time.perf_counter()
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    log.info("tool:get_invoice_by_id '%s' DB %.3f s", invoice_id, time.perf_counter() - t0)
+    log.info("tool:get_invoice_by_id '%s' DB %.3f s",
+             invoice_id, time.perf_counter() - t0)
     if not inv:
         return {"error": f"Invoice {invoice_id} not found"}
     return {
@@ -182,21 +185,17 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         "client_email": inv.client.email,
     }
 
-# ───────────── FCC tool wrappers (call fcc_ecfs) ───────────── #
+# ──────────── FCC wrappers (use fcc_ecfs module) ────────────
 def fcc_search_filings(company: str) -> list[dict]:
-    """Return numbered list of PDFs for *company*."""
+    """Return numbered list of PDFs for company."""
     return fcc_ecfs.search(company)
 
 
 def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
-    """
-    Download + parse selected FCC PDFs.
-    *indexes* are 1-based numbers from fcc_search_filings.
-    """
+    """Download & parse selected FCC PDFs (1-based indexes)."""
     return fcc_ecfs.get_texts(company, indexes)
 
-# ────────────────────────────────────────────────────────────── #
-
+# ────────────────────────────────────────────────────────────
 TOOLS = [
     {
         "type": "function",
@@ -229,7 +228,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "fcc_search_filings",
-            "description": "Search FCC ECFS for all PDF attachments of a company;",
+            "description": "Search FCC ECFS for all PDF attachments of a company",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -244,8 +243,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "fcc_get_filings_text",
-            "description": "Download and parse selected FCC ECFS PDFs. "
-                           "Returns mapping '<idx>. <filename>' → text.",
+            "description": "Download & parse selected FCC ECFS PDFs and return text",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -262,9 +260,9 @@ TOOLS = [
     },
 ]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 4.  HELPERS
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 4. HELPERS (thread / tool plumbing)
+# ────────────────────────────────────────────────────────────────────────
 def ensure_thread() -> str:
     if "thread_id" not in session:
         session["thread_id"] = client.beta.threads.create().id
@@ -274,14 +272,16 @@ def ensure_thread() -> str:
 
 def _safe_add_user_message(tid: str, content: str) -> str:
     try:
-        client.beta.threads.messages.create(thread_id=tid, role="user", content=content)
+        client.beta.threads.messages.create(
+            thread_id=tid, role="user", content=content)
         return tid
     except openai.BadRequestError as exc:
         if "while a run" not in str(exc):
             raise
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
-        client.beta.threads.messages.create(thread_id=new_tid, role="user", content=content)
+        client.beta.threads.messages.create(
+            thread_id=new_tid, role="user", content=content)
         log.warning("thread %s locked → new %s", tid, new_tid)
         return new_tid
 
@@ -308,9 +308,20 @@ def _run_tool(c: Any) -> str:
     finally:
         log.info("▲ tool %s done %.3f s", fn, time.perf_counter() - t0)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 5.  STREAMING CHAT  (batch-flush + metrics)
-# ──────────────────────────────────────────────────────────────────────────────
+# --- helpers needed by streaming code (MUST be above _extract_tool_calls) ---
+def _arguments_ready(call: Any) -> bool:
+    try:
+        return bool(call.function.arguments) and json.loads(call.function.arguments) is not None
+    except Exception:
+        return False
+
+
+def _tool_call_ready(call: Any) -> bool:
+    return bool(getattr(call, "id", None)) and _arguments_ready(call)
+
+# ────────────────────────────────────────────────────────────────────────
+# 5. STREAMING CHAT (batch-flush + tool handling)
+# ────────────────────────────────────────────────────────────────────────
 def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
     delta = getattr(ev.data, "delta", None)
     if delta:
@@ -337,11 +348,15 @@ def _extract_tool_calls(ev: Any, *, run_id_hint: str | None = None):
 
 
 def _follow_stream_after_tools(run_id: str, calls, q: queue.Queue, tid: str):
-    outs = [{"tool_call_id": c.id, "output": _run_tool(c)} for c in calls if _tool_call_ready(c)]
+    outs = [
+        {"tool_call_id": c.id, "output": _run_tool(c)}
+        for c in calls if _tool_call_ready(c)
+    ]
     if not outs:
         return
     follow = client.beta.threads.runs.submit_tool_outputs(
-        thread_id=tid, run_id=run_id, tool_outputs=outs, stream=True
+        thread_id=tid, run_id=run_id,
+        tool_outputs=outs, stream=True
     )
     pipe_events(follow, q, tid)
 
@@ -362,7 +377,7 @@ def pipe_events(events, q: queue.Queue, tid: str):
 
     tok_buf: list[str] = []
     buf_chars = 0
-    next_flush = time.perf_counter() + 0.10     # flush every 100 ms
+    next_flush = time.perf_counter() + 0.10  # flush every 100 ms
 
     for ev in events:
         if ev.event == "thread.run.created":
@@ -411,7 +426,8 @@ def pipe_events(events, q: queue.Queue, tid: str):
             "overall": f"{done_at - t0:.3f}s",
             "fragments": n_frag,
         }
-        log.info("timing-summary %s %s", run_id, json.dumps(metrics, ensure_ascii=False))
+        log.info("timing-summary %s %s",
+                 run_id, json.dumps(metrics, ensure_ascii=False))
 
 
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
@@ -446,8 +462,10 @@ def chat_stream():
         try:
             with app.app_context():
                 first = client.beta.threads.runs.create(
-                    thread_id=tid, assistant_id=ASSISTANT_ID,
-                    tools=TOOLS, stream=True,
+                    thread_id=tid,
+                    assistant_id=ASSISTANT_ID,
+                    tools=TOOLS,
+                    stream=True,
                     **({"model": MODEL} if MODEL else {}),
                 )
                 pipe_events(first, q, tid)
@@ -459,12 +477,15 @@ def chat_stream():
     return Response(
         sse_generator(q),
         mimetype="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache"
+        },
     )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 6.  CSV / CRUD  (unchanged)
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 6. CSV / CRUD (unchanged from your version)
+# ────────────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -535,7 +556,10 @@ def delete_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
-    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
+    rows = (
+        [Invoice.query.get_or_404(invoice_id)]
+        if invoice_id else Invoice.query.all()
+    )
     csv_data = pd.DataFrame(
         [
             {
@@ -555,13 +579,15 @@ def export_invoice(invoice_id: int | None = None):
     return (
         csv_data,
         200,
-        {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename="{fname}"'},
+        {
+            "Content-Type": "text/csv",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        },
     )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 7.  ENTRY POINT
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────
+# 7. ENTRY POINT
+# ────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
