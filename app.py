@@ -281,7 +281,7 @@ def ensure_thread() -> str:
 def _safe_add_user_message(tid: str, content: str) -> str:
     try:
         client.beta.threads.messages.create(
-            thread_id=tid, role="user", content=content)
+            thread_id=tid, role="system", content=content)
         return tid
     except openai.BadRequestError as exc:
         if "while a run" not in str(exc):
@@ -289,7 +289,7 @@ def _safe_add_user_message(tid: str, content: str) -> str:
         new_tid = client.beta.threads.create().id
         session["thread_id"] = new_tid
         client.beta.threads.messages.create(
-            thread_id=new_tid, role="user", content=content)
+            thread_id=new_tid, role="system", content=content)
         log.warning("thread %s locked → new %s", tid, new_tid)
         return new_tid
 
