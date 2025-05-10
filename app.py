@@ -213,7 +213,7 @@ def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
     return fcc_ecfs.get_texts(company, indexes)
 
 # ────────────────────────────────────────────────────────────
-TOOLS = [
+TOOLS = [{"type": "file_search"},
     {
         "type": "function",
         "function": {
@@ -486,8 +486,8 @@ def chat_stream():
         #             tool_resources={
         # "file_search": {"vector_store_ids": ["vs_abc123"]}
         #                 },
-        #             **({"model": MODEL} if MODEL else {}),
-        #         )
+                    **({"model": MODEL} if MODEL else {}),
+                )
                 pipe_events(first, q, tid)
         finally:
             _close_thread_client()
