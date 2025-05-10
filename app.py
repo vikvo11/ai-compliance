@@ -478,9 +478,9 @@ def chat_stream():
                     assistant_id=ASSISTANT_ID,
                     #tools=TOOLS,
                     stream=True,
-                    tool_resources={
-        "file_search": {"vector_store_ids": ["vs_abc123"]}
-                        },
+        #             tool_resources={
+        # "file_search": {"vector_store_ids": ["vs_abc123"]}
+        #                 },
                     **({"model": MODEL} if MODEL else {}),
                 )
                 pipe_events(first, q, tid)
