@@ -72,10 +72,11 @@ if not ASSISTANT_ID:
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)",
          MODEL or "(default)", ASSISTANT_ID)
-openai.api_key = OPENAI_API_KEY
-a = openai.beta.assistants.retrieve(ASSISTANT_ID)
 
-print(f'a.tools={a.tools} , a.tool_resources={a.tool_resources}')
+# openai.api_key = OPENAI_API_KEY
+# a = openai.beta.assistants.retrieve(ASSISTANT_ID)
+
+# print(f'a.tools={a.tools} , a.tool_resources={a.tool_resources}')
 
 # ────────────────────────────────────────────────────────────────────────
 # 2. FLASK & DB
@@ -478,9 +479,9 @@ def chat_stream():
                     assistant_id=ASSISTANT_ID,
                     #tools=TOOLS,
                     stream=True,
-        #             tool_resources={
-        # "file_search": {"vector_store_ids": ["vs_abc123"]}
-        #                 },
+                    tool_resources={
+        "file_search": {"vector_store_ids": ["vs_abc123"]}
+                        },
                     **({"model": MODEL} if MODEL else {}),
                 )
                 pipe_events(first, q, tid)
