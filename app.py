@@ -481,7 +481,7 @@ def chat_stream():
                 first = client.beta.threads.runs.create(
                     thread_id=tid,
                     assistant_id=ASSISTANT_ID,
-                    #tools=TOOLS,
+                    tools=TOOLS,
                     stream=True,
         #             tool_resources={
         # "file_search": {"vector_store_ids": ["vs_abc123"]}
