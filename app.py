@@ -1,4 +1,3 @@
-и пойми почему не работает код:
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling) — SDK ≥ 1.78
