@@ -75,7 +75,7 @@ log.info("OpenAI client ready (model=%s, assistant=%s)",
 openai.api_key = OPENAI_API_KEY
 a = openai.beta.assistants.retrieve(ASSISTANT_ID)
 
-print(f'a.tools={client.tools} , a.tool_resources={client.tool_resources}')
+print(f'a.tools={a.tools} , a.tool_resources={a.tool_resources}')
 
 # ────────────────────────────────────────────────────────────────────────
 # 2. FLASK & DB
