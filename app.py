@@ -1,6 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling) — SDK 1.78+
+# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling) — SDK ≥ 1.78
+# All comments in English as requested
 from __future__ import annotations
 
 import os
@@ -19,7 +20,7 @@ import httpx
 import pandas as pd
 import configparser
 import openai
-from openai import OpenAI, NotFoundError      # ← new import
+from openai import OpenAI, NotFoundError
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context
@@ -42,11 +43,12 @@ cfg.read("cfg/openai.cfg")
 
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
 MODEL = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+
 if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
 
-client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)   # ← new style
+client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)  # new-style client
 
 # ─────────────────── 2. FLASK & DB ───────────────────────────
 app = Flask(__name__)
@@ -81,11 +83,13 @@ with app.app_context():
     db.create_all()
 
 # ─────────────────── 3. TOOL FUNCTIONS ───────────────────────
-HTTP_TIMEOUT = httpx.Timeout(6.0)
+# Use explicit connect/read timeouts to avoid blocking the event-loop
+HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0)
 
 
 @functools.lru_cache(maxsize=1024)
 def _coords_for(city: str) -> tuple[float, float] | None:
+    """Return lat/lon for a city name (sync → cached)."""
     r = httpx.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": city, "count": 1},
@@ -96,6 +100,7 @@ def _coords_for(city: str) -> tuple[float, float] | None:
 
 
 async def _weather_for(lat: float, lon: float) -> dict:
+    """Fetch current_weather (async)."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
         r = await ac.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -105,6 +110,7 @@ async def _weather_for(lat: float, lon: float) -> dict:
 
 
 def get_current_weather(location: str, unit: str = "celsius") -> str:
+    """Return temperature string for the provided location."""
     coords = _coords_for(location)
     cw = asyncio.run(_weather_for(*coords)) if coords else None
     if not cw:
@@ -115,6 +121,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
+    """Lookup an invoice in the local DB and return details."""
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     return (
         {"error": f"Invoice {invoice_id} not found"}
@@ -129,36 +136,41 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         }
     )
 
-
+# ── Tools list MUST follow the “type=function / function={…}” schema
 TOOLS = [
     {
-        "name": "get_current_weather",
         "type": "function",
-        "description": "Get current weather",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "location": {"type": "string"},
-                "unit": {
-                    "type": "string",
-                    "enum": ["celsius", "fahrenheit"],
-                    "default": "celsius",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Return the current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name"},
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "default": "celsius",
+                    },
                 },
+                "required": ["location"],
             },
-            "required": ["location"],
         },
     },
     {
-        "name": "get_invoice_by_id",
         "type": "function",
-        "description": "Return invoice data",
-        "parameters": {
-            "type": "object",
-            "properties": {"invoice_id": {"type": "string"}},
-            "required": ["invoice_id"],
+        "function": {
+            "name": "get_invoice_by_id",
+            "description": "Return invoice data for a given invoice ID",
+            "parameters": {
+                "type": "object",
+                "properties": {"invoice_id": {"type": "string"}},
+                "required": ["invoice_id"],
+            },
         },
     },
 ]
+
 DISPATCH = {
     "get_current_weather": get_current_weather,
     "get_invoice_by_id": get_invoice_by_id,
@@ -166,7 +178,7 @@ DISPATCH = {
 
 # ─────────────────── 4. STREAM HANDLER ───────────────────────
 def _run_tool(name: str, args: str) -> str:
-    """Execute a tool and always return a string (JSON‐string for dict)."""
+    """Execute a tool and always return a string (JSON-string when dict)."""
     try:
         params = json.loads(args or "{}")
     except json.JSONDecodeError:
@@ -178,37 +190,25 @@ def _run_tool(name: str, args: str) -> str:
 
 def _finish_tool(
     response_id: str,
-    thread_id: str | None,           # not used in Responses-flow
-    run_id: str | None,              # not used in Responses-flow
+    thread_id: str | None,
+    run_id: str | None,
     tool_call_id: str,
     name: str,
     args_json: str,
     q: queue.Queue[str | None],
 ) -> str:
-    """Execute the tool, send its output back via Responses API, keep streaming."""
+    """Execute the tool, send its output back, keep streaming."""
     log.info("RUN tool=%s id=%s args=%s", name, tool_call_id, args_json)
-    print(f"DBG | RUN tool={name} id={tool_call_id}")
-
-    # 1) run local Python function
     output = _run_tool(name, args_json)
 
-    # 2) hand result to OpenAI — ONLY through Responses.submit_tool_outputs
-    try:
-        follow = client.responses.submit_tool_outputs(
-            response_id=response_id,
-            tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
-            stream=True,                     # keep SSE stream alive
-        )
-    except AttributeError:
-        # Your SDK is too old / too new?   Give a clear error to logs & user
-        err_msg = "[internal error: Responses.submit_tool_outputs() not found]"
-        log.exception(err_msg)
-        q.put(f"\n{err_msg}\n")
-        q.put(None)
-        return response_id
-
-    # 3) continue parsing the follow-up stream
-    return _pipe(follow, q, thread_id, run_id)
+    # Send tool result back via submit_tool_outputs (stream=True to continue)
+    follow = client.responses.submit_tool_outputs(
+        response_id=response_id,
+        tool_outputs=[{"tool_call_id": tool_call_id, "output": output}],
+        stream=True,
+    )
+    # Pipe the follow-up stream; mark as inner so it does not close the queue
+    return _pipe(follow, q, thread_id, run_id, inner=True)
 
 
 def _pipe(  # noqa: C901
@@ -216,46 +216,37 @@ def _pipe(  # noqa: C901
     q: queue.Queue[str | None],
     thread_id: str | None = None,
     run_id: str | None = None,
+    *,
+    inner: bool = False,
 ) -> str:
-    """Parse the streaming events from the Responses API."""
-    print("DBG | PIPE START")
+    """Parse streaming events from Responses API."""
     response_id = ""
     buf: dict[str, dict[str, Any]] = {}  # tool_call_id → {"name": str, "parts": []}
 
     for ev in stream:
         typ = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
         delta = getattr(ev, "delta", None)
-        
-        # NEW: catch IDs that may already be on the event itself
+
+        # IDs may be present on any event
         thread_id = getattr(ev, "thread_id", thread_id)
-        run_id    = getattr(ev, "run_id", run_id)
-        
-        log.info("▶ %s   delta=%s", typ, bool(delta))
-        print(f"DBG | ▶ {typ:40} delta={bool(delta)}")
+        run_id = getattr(ev, "run_id", run_id)
 
         # Save response / thread / run IDs
         if getattr(ev, "response", None):
             response_id = ev.response.id
             thread_id = getattr(ev.response, "thread_id", thread_id)
             run_id = getattr(ev.response, "run_id", run_id)
-            print(
-                f"DBG |   response.id={response_id}  "
-                f"thread_id={thread_id}  run_id={run_id}"
-            )
 
         # Plain text tokens
         if isinstance(delta, str) and "arguments" not in typ:
-            print(f"DBG |   text: {delta[:70].replace(chr(10), '⏎')}")
             q.put(delta)
 
         # ── old schema: response.tool_calls ───────────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 buf[tc.id] = {"name": tc.function.name, "parts": []}
-                print(f"DBG |   tool_call id={tc.id} name={tc.function.name}")
                 full = getattr(tc.function, "arguments", None)
                 if full:
-                    print("DBG |   immediate JSON args")
                     response_id = _finish_tool(
                         response_id, thread_id, run_id, tc.id, tc.function.name, full, q
                     )
@@ -281,7 +272,6 @@ def _pipe(  # noqa: C901
                 )
                 if fname:
                     buf[iid] = {"name": fname, "parts": []}
-                    print(f"DBG |   declare id={iid} func={fname}")
 
         # Argument deltas
         if "arguments.delta" in typ:
@@ -292,10 +282,6 @@ def _pipe(  # noqa: C901
             )
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
-                print(
-                    f"DBG |   arg-chunk for {iid}  "
-                    f"len={len(buf[iid]['parts'])}"
-                )
 
         # End of arguments
         if typ.endswith("arguments.done"):
@@ -306,7 +292,6 @@ def _pipe(  # noqa: C901
             )
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
-                print(f"DBG |   args.done id={iid}  json={full_json}")
                 response_id = _finish_tool(
                     response_id,
                     thread_id,
@@ -324,18 +309,19 @@ def _pipe(  # noqa: C901
             "response.completed",
             "response.output_text.done",
         ):
-            print(f"DBG | PIPE FINISH — {typ}")
-            q.put(None)
+            if not inner:
+                q.put(None)
             return response_id
 
-    print("DBG | PIPE END without explicit done")
-    q.put(None)
+    # Stream ended unexpectedly
+    if not inner:
+        q.put(None)
     return response_id
 
 
-# ─────────────────── 5. SSE ──────────────────────────────────
+# ─────────────────── 5. SSE GENERATOR ───────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
-    """Simple Server-Sent Events generator with keep-alive pings."""
+    """Simple SSE generator with keep-alive pings."""
     keep = time.time() + 20
     while True:
         try:
@@ -347,6 +333,7 @@ def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
             keep = time.time() + 20
         except queue.Empty:
             if time.time() > keep:
+                # comment lines are SSE pings
                 yield b": ping\n\n"
                 keep = time.time() + 20
 
@@ -354,6 +341,7 @@ def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
 # ─────────────────── 6. CHAT ENDPOINT ───────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
+    """POST JSON: { "message": "..." } → SSE stream with assistant reply."""
     msg = (request.json or {}).get("message", "").strip()
     if not msg:
         return jsonify({"error": "Empty message"}), 400
@@ -368,6 +356,7 @@ def chat_stream():
             input=msg,
             previous_response_id=last_resp_id,
             tools=TOOLS,
+            tool_choice="auto",   # allow model to call tools
             stream=True,
         )
         session["prev_response_id"] = _pipe(stream, q)
@@ -393,6 +382,7 @@ def index():
         df = pd.read_csv(f)
         new_clients: dict[str, Client] = {}
         invoices: list[Invoice] = []
+
         for _, row in df.iterrows():
             name = row["client_name"]
             cl = Client.query.filter_by(name=name).first() or new_clients.get(name)
@@ -408,6 +398,7 @@ def index():
                     client=cl,
                 )
             )
+
         db.session.add_all(new_clients.values())
         db.session.add_all(invoices)
         db.session.commit()
@@ -424,6 +415,7 @@ def index():
 
 @app.route("/edit/<int:invoice_id>", methods=["POST"])
 def edit_invoice(invoice_id: int):
+    """Update an invoice row."""
     inv = Invoice.query.get_or_404(invoice_id)
     inv.amount = request.form["amount"]
     inv.date_due = request.form["date_due"]
@@ -444,6 +436,7 @@ def edit_invoice(invoice_id: int):
 
 @app.route("/delete/<int:invoice_id>", methods=["POST"])
 def delete_invoice(invoice_id: int):
+    """Delete an invoice."""
     inv = Invoice.query.get_or_404(invoice_id)
     db.session.delete(inv)
     db.session.commit()
@@ -455,6 +448,7 @@ def delete_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
+    """Export invoices as CSV (all or single)."""
     rows = (
         [Invoice.query.get_or_404(invoice_id)]
         if invoice_id
@@ -488,5 +482,5 @@ def export_invoice(invoice_id: int | None = None):
 
 # ─────────────────── 8. RUN ──────────────────────────────────
 if __name__ == "__main__":
-    print(openai.__version__)      # 1.78.0+
+    print("openai-python version:", openai.__version__)  # 1.78.0+
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
