@@ -473,7 +473,7 @@ def chat_stream():
                     thread_id=tid,
                     assistant_id=ASSISTANT_ID,
                     #tools=TOOLS,
-                    tools=assistant.tools
+                    tools=assistant.tools,
                     stream=True,
                     **({"model": MODEL} if MODEL else {}),
                 )
