@@ -70,7 +70,7 @@ toolsr = [{
 responses = client.responses.create(
     model="gpt-4.1",
     input=[{"role": "user", "content": "What is the weather like in Paris today?"}],
-    toolsr=tools
+    tools=toolsr
 )
 
 print(responses.output)
