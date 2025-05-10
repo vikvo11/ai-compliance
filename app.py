@@ -72,6 +72,7 @@ if not ASSISTANT_ID:
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)",
          MODEL or "(default)", ASSISTANT_ID)
+openai.api_key = OPENAI_API_KEY
 a = openai.beta.assistants.retrieve(ASSISTANT_ID)
 
 print(f'a.tools={client.tools} , a.tool_resources={client.tool_resources}')
