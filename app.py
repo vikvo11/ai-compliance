@@ -56,12 +56,14 @@ logging.basicConfig(
 log = logging.getLogger("app")
 
 # ─────────────────── 1. OPENAI CONFIG ───────────────────────
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    log.critical("OPENAI_API_KEY environment variable is not set")
-    sys.exit(1)
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+cfg = configparser.ConfigParser()
+cfg.read("cfg/openai.cfg")
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
+MODEL = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+if not OPENAI_API_KEY:
+    log.critical("OPENAI_API_KEY missing")
+    sys.exit(1)
 
 aio_client = OpenAI(  # single shared client instance
     api_key=OPENAI_API_KEY,
