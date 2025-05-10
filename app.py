@@ -72,7 +72,7 @@ if not ASSISTANT_ID:
 client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 log.info("OpenAI client ready (model=%s, assistant=%s)",
          MODEL or "(default)", ASSISTANT_ID)
-print(f'client.tools={client.tools} , client.tool_resources={client.tool_resources})
+print(f'client.tools={client.tools} , client.tool_resources={client.tool_resources}')
 
 # ────────────────────────────────────────────────────────────────────────
 # 2. FLASK & DB
