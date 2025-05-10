@@ -74,7 +74,7 @@ responses = client.responses.create(
 )
 
 print(responses.output)
-print(responses)
+print(responses.output_text)
 
 # ─────────────────── 2. FLASK & DB ───────────────────────────
 app = Flask(__name__)
