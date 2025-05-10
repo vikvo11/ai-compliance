@@ -139,36 +139,33 @@ def get_invoice_by_id(invoice_id: str) -> dict:
 TOOLS = [
     {
         "type": "function",
-        "function": {
-            "name": "get_current_weather",
-            "description": "Get the current weather for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "City name"},
-                    "unit": {
-                        "type": "string",
-                        "enum": ["celsius", "fahrenheit"],
-                        "default": "celsius",
-                    },
+        "name": "get_current_weather",          # <-- moved up
+        "description": "Get the current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "City name"},
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "default": "celsius",
                 },
-                "required": ["location"],
             },
+            "required": ["location"],
         },
     },
     {
         "type": "function",
-        "function": {
-            "name": "get_invoice_by_id",
-            "description": "Return invoice data for a given invoice number",
-            "parameters": {
-                "type": "object",
-                "properties": {"invoice_id": {"type": "string"}},
-                "required": ["invoice_id"],
-            },
+        "name": "get_invoice_by_id",            # <-- moved up
+        "description": "Return invoice data for a given invoice number",
+        "parameters": {
+            "type": "object",
+            "properties": {"invoice_id": {"type": "string"}},
+            "required": ["invoice_id"],
         },
     },
 ]
+
 
 # Maps tool names to local Python callables.
 DISPATCH = {
@@ -249,12 +246,22 @@ def _pipe(  # noqa: C901
         # ── old schema: response.tool_calls ───────────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
-                buf[tc.id] = {"name": tc.function.name, "parts": []}
-                full = getattr(tc.function, "arguments", None)
-                if full:
+                # works for both shapes
+                fn_name = (
+                    getattr(tc, "function", None).name      # nested
+                    if getattr(tc, "function", None)
+                    else getattr(tc, "name", None)          # flat
+                )
+                full_args = (
+                    getattr(tc, "function", None).arguments
+                    if getattr(tc, "function", None)
+                    else getattr(tc, "arguments", None)
+                )
+                buf[tc.id] = {"name": fn_name, "parts": []}
+                if full_args:
                     response_id = _finish_tool(
-                        response_id, thread_id, run_id, tc.id,
-                        tc.function.name, full, q
+                        response_id, thread_id, run_id,
+                        tc.id, fn_name, full_args, q
                     )
 
         # ── new schema: response.output_item.added ────────────
