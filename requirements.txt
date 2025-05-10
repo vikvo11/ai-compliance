@@ -2,6 +2,8 @@ Flask==2.2.5
 gunicorn
 flask_sqlalchemy
 pandas
-openai>=1.78
+openai>=1.78.0
 configparser
 requests>=2.0.0
+pdfplumber>=0.10
+tqdm>=4.66
