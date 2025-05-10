@@ -370,17 +370,18 @@ async function sendMessage() {
         buf += dec.decode(value, { stream: true });
         const parts = buf.split('\n\n');
         buf = parts.pop(); // keep leftover in buffer
-        for (const p of parts) {
-          if (p.startsWith('event: done')) {
-            rdr.cancel();
-            break;
-          }
-          const l = p.split('\n').find(x => x.startsWith('data:'));
-          if (l) {
-            // slice(6) → remove 'data: '
-            push(l.slice(6));
-          }
-        }
+for (const ev of parts) {
+  if (ev.startsWith('event: done')) { rdr.cancel(); break; }
+
+  /* collect every "data: …" line inside the event */
+  const chunk = ev
+    .split('\n')                  // physical SSE lines
+    .filter(line => line.startsWith('data:'))
+    .map(line  => line.slice(6))  // strip "data: "
+    .join('\n');                  // restore original line breaks
+
+  if (chunk) push(chunk);
+}
       }
     } else {
       // Non-stream fallback
