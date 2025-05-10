@@ -157,15 +157,18 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "location": {"type": "string", "description": "City name"},
-                "unit": {
+                "location": {
                     "type": "string",
-                    "enum": ["celsius", "fahrenheit"],
-                    "description": "Temperature unit.",
-                    "default": "celsius",
+                    "description": "City name"
+                },
+                "unit": {
+                    "type": ["string", "null"],
+                    "enum": ["celsius", "fahrenheit", None],
+                    "description": "Temperature unit (default celsius).",
+                    "default": "celsius"
                 },
             },
-            "required": ["location"],
+            "required": ["location", "unit"],
             "additionalProperties": False,
         },
     },
@@ -177,7 +180,10 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "invoice_id": {"type": "string", "description": "Invoice identifier"}
+                "invoice_id": {
+                    "type": "string",
+                    "description": "Invoice identifier"
+                }
             },
             "required": ["invoice_id"],
             "additionalProperties": False,
