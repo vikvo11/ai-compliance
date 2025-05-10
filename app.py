@@ -48,13 +48,32 @@ if not OPENAI_API_KEY:
     sys.exit(1)
     
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)   # new-style client
+toolsr = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get current temperature for a given location.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "City and country e.g. Bogotá, Colombia"
+            }
+        },
+        "required": [
+            "location"
+        ],
+        "additionalProperties": False
+    }
+}]
 
 responses = client.responses.create(
-    model="gpt-4o-mini",
-    tools=[{ "type": "web_search_preview" }],
-    input="What was a positive news story from today?",
+    model="gpt-4.1",
+    input=[{"role": "user", "content": "What is the weather like in Paris today?"}],
+    toolsr=tools
 )
 
+print(responses.output)
 print(responses)
 
 # ─────────────────── 2. FLASK & DB ───────────────────────────
