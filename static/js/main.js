@@ -303,24 +303,20 @@ const stopDots = el=>{
   delete el._timer;
 };
 
-/* send --------------------------------------------------- */
-async function sendMessage(){
+/ ------------------- STREAMING CHAT (SSE) -------------------
+async function sendMessage() {
   const msg = chatInput.value.trim();
-  if(!msg || chatBusy) return;
+  if (!msg || chatBusy) return;
 
   chatBusy = true;
-  chatInput.disabled = true;
-  sendBtn.disabled   = true;
-
-  addMessage(msg, 'message user');
   chatInput.value = '';
+  addMessage(msg, 'message user');
 
   const aiDiv = addMessage('', 'message assistant typing');
   startDots(aiDiv);
 
-  /* push received chunk into bubble */
-  const push = chunk=>{
-    if(aiDiv.classList.contains('typing')){
+  const push = chunk => {
+    if (aiDiv.classList.contains('typing')) {
       stopDots(aiDiv);
       aiDiv.textContent = '';
       aiDiv.classList.remove('typing');
@@ -330,63 +326,46 @@ async function sendMessage(){
       chatBox.querySelector('.messages').scrollHeight;
   };
 
-  try{
-    if(USE_STREAM){
-      const res = await fetch('/chat/stream',{
-        method : 'POST',
-        headers: {'Content-Type':'application/json'},
-        body   : JSON.stringify({message:msg})
-      });
-      if(!res.ok || !res.body) throw new Error('Network error');
+  try {
+    const res = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg })
+    });
+    if (!res.ok || !res.body) throw new Error('Network error');
 
-      const rdr = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
+    const rdr = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
 
-      while(true){
-        const {value,done} = await rdr.read();
-        if(done) break;
-        buf += dec.decode(value,{stream:true});
+    while (true) {
+      const { value, done } = await rdr.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
 
-        /* each SSE event ends with "\n\n" */
-        const events = buf.split('\n\n');
-        buf = events.pop();               // keep incomplete tail
+      // одно событие SSE = блок до двойного \n\n
+      const events = buf.split('\n\n');
+      buf = events.pop();               // хвост оставляем
 
-        for(const ev of events){
-          if(ev.startsWith('event: done')){
-            rdr.cancel();                 // server signalled end
-            break;
-          }
-          /* collect ALL "data: " lines, join with \n */
-          const chunk = ev
-            .split('\n')
-            .filter(line => line.startsWith('data:'))
-            .map(line   => line.slice(6))
-            .join('\n');
+      for (const ev of events) {
+        if (ev.startsWith('event: done')) { rdr.cancel(); break; }
 
-          if(chunk) push(chunk);
-        }
+        // собираем ВСЕ строки "data: …" и восстанавливаем \n
+        const chunk = ev
+          .split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(6))
+          .join('\n');
+
+        if (chunk) push(chunk);
       }
-    }else{
-      /* fallback: single-shot endpoint */
-      const res = await fetch('/chat',{
-        method : 'POST',
-        headers: {'Content-Type':'application/json'},
-        body   : JSON.stringify({message:msg})
-      });
-      const d = await res.json();
-      stopDots(aiDiv);
-      aiDiv.textContent = d.response || d.error || 'No response';
     }
-  }catch(err){
+  } catch (err) {
     console.error(err);
     stopDots(aiDiv);
-    aiDiv.textContent='Error contacting server';
-  }finally{
+    aiDiv.textContent = 'Error contacting server';
+  } finally {
     chatBusy = false;
-    chatInput.disabled = false;
-    sendBtn.disabled   = false;
-    aiDiv.classList.remove('typing');
     chatInput.focus();
   }
 }
