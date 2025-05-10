@@ -447,17 +447,24 @@ def pipe_events(events, q: queue.Queue, tid: str):
                  run_id, json.dumps(metrics, ensure_ascii=False))
 
 
+# ────────────────────────────────────────────────────────────────────
+# 5. STREAMING CHAT 
+# ────────────────────────────────────────────────────────────────────
 def sse_generator(q: queue.Queue) -> Generator[bytes, None, None]:
     heartbeat_at = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
-            if tok is None:
+            if tok is None:                              
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
-            yield f"data: {tok}\n\n".encode()
+            for line in tok.splitlines():
+                yield f"data: {line}\n".encode("utf-8")
+
+            yield b"\n"
             heartbeat_at = time.time() + 20
-        except queue.Empty:
+
+        except queue.Empty:                              # heartbeat
             if time.time() > heartbeat_at:
                 yield b": keep-alive\n\n"
                 heartbeat_at = time.time() + 20
