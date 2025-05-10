@@ -1,6 +1,6 @@
 /* main.js */
 /* Comments in English as requested. -------------------------------------------
-   – Drag-and-drop CSV upload
+   – Drag-&-drop CSV upload
    – Invoice editing + toast notifications
    – Fancy demo animations / crack-glass effect
    – Light/night theme toggle
@@ -19,9 +19,9 @@
 const COMPACT_HEIGHT = '420px';       // fixed height when folded
 const USE_STREAM     = true;          // switch to `/chat` if false
 
-/* ════════════════════════════════════════════════════════════════════════════
-   1. DRAG-AND-DROP FOR CSV
-═════════════════════════════════════════════════════════════════════════════ */
+/* --------------------------------
+   DRAG-AND-DROP FOR CSV
+----------------------------------- */
 let dragCounter = 0;
 function handleDragOver(e){ e.preventDefault(); }
 function handleDragLeave(e){
@@ -47,8 +47,13 @@ document.addEventListener('dragover',handleDragOver);
 document.addEventListener('dragleave',handleDragLeave);
 document.addEventListener('drop',handleDrop);
 
+function toggleInvoices(){
+  const t = document.getElementById('invoiceTable');
+  t.style.display = (t.style.display === 'none') ? 'block' : 'none';
+}
+
 /* --------------------------------
-   2. FADE-IN ON SCROLL
+   FADE-IN ON SCROLL
 ----------------------------------- */
 document.querySelectorAll('.fade').forEach(el=>{
   const io = new IntersectionObserver(e=>{
@@ -58,7 +63,7 @@ document.querySelectorAll('.fade').forEach(el=>{
 });
 
 /* --------------------------------
-   3. TOAST
+   TOAST
 ----------------------------------- */
 function showToast(msg){
   const c = document.getElementById('toast-container');
@@ -68,7 +73,7 @@ function showToast(msg){
 }
 
 /* --------------------------------
-   4. INVOICE CRUD
+   SAVE INVOICE
 ----------------------------------- */
 async function saveInvoice(e,id){
   e.preventDefault();
@@ -90,13 +95,9 @@ const toggleEdit=id=>{
   const row=document.getElementById(`edit-row-${id}`);
   row.style.display=(row.style.display==='none')?'table-row':'none';
 };
-function toggleInvoices(){
-  const t = document.getElementById('invoiceTable');
-  t.style.display = (t.style.display === 'none') ? 'block' : 'none';
-}
 
 /* --------------------------------
-   5. TYPE EFFECT & TERMINAL DEMOS
+   TYPE EFFECT & TERMINAL DEMOS
 ----------------------------------- */
 function typeInto(el,txt,speed=60,cb){
   let i=0;(function t(){
@@ -153,7 +154,7 @@ onceVisible('#actions',()=>{
 });
 
 /* --------------------------------
-   6. CRACK-GLASS ANIMATION
+   CRACK-GLASS ANIMATION
 ----------------------------------- */
 function crackGlass(){
   const block=document.getElementById('ai-extract-block');
@@ -182,25 +183,20 @@ function crackGlass(){
 }
 
 /* --------------------------------
-   7. DOM-READY SETUP
+   DOM-READY SETUP
 ----------------------------------- */
 document.addEventListener('DOMContentLoaded',()=>{
-  /* compact chat init */
   chatBox.style.display='none';
   chatBox.style.width='340px';
-  chatBox.style.height=COMPACT_HEIGHT;
+  chatBox.style.height=COMPACT_HEIGHT;                   // fixed height
   chatBox.querySelector('.messages').style.maxHeight='300px';
 
-  /* enable input that came disabled in HTML */
-  chatInput.removeAttribute('disabled');
-  sendBtn.removeAttribute('disabled');
-
   document.getElementById('expand-chat')?.addEventListener('click',()=>{
-    if(chatBox.style.width==='600px'){                   // collapse
+    if(chatBox.style.width==='600px'){                   /* collapse */
       chatBox.style.width='340px';
       chatBox.style.height=COMPACT_HEIGHT;
       chatBox.querySelector('.messages').style.maxHeight='300px';
-    }else{                                               // expand
+    }else{                                               /* expand */
       chatBox.style.display='flex'; chatBox.style.flexDirection='column';
       chatBox.style.width='600px'; chatBox.style.height='80vh';
       chatBox.querySelector('.messages').style.maxHeight='';
@@ -209,9 +205,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('ai-extract-block')?.addEventListener('click',crackGlass);
 });
 
-/* ════════════════════════════════════════════════════════════════════════════
-   8. CHAT WIDGET
-═════════════════════════════════════════════════════════════════════════════ */
+/* --------------------------------
+   CHAT
+----------------------------------- */
 const launcher  = document.getElementById('chat-launcher');
 const chatBox   = document.getElementById('chat-box');
 const chatInput = chatBox.querySelector('textarea');
@@ -222,19 +218,18 @@ let chatBusy=false;
 function addMessage(txt, cls='message'){
   const d=document.createElement('div');
   d.className=cls; d.textContent=txt;
-  chatBox.querySelector('.messages').appendChild(d);
-  chatBox.querySelector('.messages').scrollTop =
-    chatBox.querySelector('.messages').scrollHeight;
+  const pane=chatBox.querySelector('.messages');
+  pane.appendChild(d); pane.scrollTop=pane.scrollHeight;
   return d;
 }
 
 launcher.addEventListener('click',()=>{
   if(chatBox.style.display==='flex'){ chatBox.style.display='none'; return; }
   chatBox.style.display='flex'; chatBox.style.flexDirection='column';
-  chatInput.focus();
+  chatInput.disabled=false; sendBtn.disabled=false; chatInput.focus();
 });
 
-/* animated “…” */
+/* ellipsis anim */
 const startDots=el=>{
   let dots=1; el.textContent='.'; el._timer=setInterval(()=>{ dots=(dots%3)+1; el.textContent='.'.repeat(dots); },400);
 };
@@ -245,9 +240,12 @@ async function sendMessage(){
   const msg=chatInput.value.trim();
   if(!msg || chatBusy) return;
 
-  chatBusy=true; chatInput.value='';
-  const aiDiv=addMessage('', 'message assistant typing');
+  chatBusy=true; chatInput.disabled=true; sendBtn.disabled=true;
+
   addMessage(msg,'message user');
+  chatInput.value='';
+
+  const aiDiv=addMessage('', 'message assistant typing');
   startDots(aiDiv);
 
   const push=chunk=>{
@@ -255,59 +253,34 @@ async function sendMessage(){
       stopDots(aiDiv); aiDiv.textContent=''; aiDiv.classList.remove('typing');
     }
     aiDiv.textContent+=chunk;
-    chatBox.querySelector('.messages').scrollTop =
-      chatBox.querySelector('.messages').scrollHeight;
+    chatBox.querySelector('.messages').scrollTop=chatBox.querySelector('.messages').scrollHeight;
   };
 
   try{
     if(USE_STREAM){
-      const res=await fetch('/chat/stream',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({message:msg})
-      });
+      const res=await fetch('/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
       if(!res.ok || !res.body) throw new Error('Network error');
-
-      const rdr=res.body.getReader();
-      const dec=new TextDecoder();
-      let buf='';
-
+      const rdr=res.body.getReader(), dec=new TextDecoder(); let buf='';
       while(true){
         const {value,done}=await rdr.read(); if(done) break;
         buf+=dec.decode(value,{stream:true});
-
-        /* one SSE event is separated by double newline */
-        const events=buf.split('\n\n');
-        buf=events.pop();                          // keep tail
-
-        for(const ev of events){
-          if(ev.startsWith('event: done')){ rdr.cancel(); break; }
-
-          /* collect ALL `data:` lines, restore original \n */
-          const chunk=ev.split('\n')
-                        .filter(l=>l.startsWith('data:'))
-                        .map(l=>l.slice(6))
-                        .join('\n');
-          if(chunk) push(chunk);
+        const parts=buf.split('\n\n'); buf=parts.pop();
+        for(const p of parts){
+          if(p.startsWith('event: done')){ rdr.cancel(); break; }
+          const l=p.split('\n').find(x=>x.startsWith('data:'));
+          if(l) push(l.slice(6));
         }
       }
-    }else{ // fallback non-stream
-      const res=await fetch('/chat',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({message:msg})
-      });
+    }else{
+      const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
       const d=await res.json();
-      stopDots(aiDiv);
-      aiDiv.textContent=d.response||d.error||'No response';
+      stopDots(aiDiv); aiDiv.textContent=d.response||d.error||'No response';
     }
   }catch(err){
-    console.error(err);
-    stopDots(aiDiv);
-    aiDiv.textContent='Error contacting server';
+    console.error(err); stopDots(aiDiv); aiDiv.textContent='Error contacting server';
   }finally{
-    chatBusy=false;
-    chatInput.focus();
+    chatBusy=false; chatInput.disabled=false; sendBtn.disabled=false;
+    aiDiv.classList.remove('typing'); chatInput.focus();
   }
 }
 
@@ -317,7 +290,7 @@ chatInput.addEventListener('keydown',e=>{
 });
 
 /* --------------------------------
-   9. AUTO THEME
+   AUTO THEME
 ----------------------------------- */
 (()=>{
   const hr=new Date().getHours();
