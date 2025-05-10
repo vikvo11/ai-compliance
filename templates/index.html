@@ -20,29 +20,17 @@
 
 }
   /* shared bubble styling */
-  .message{
-    padding:0.75rem;
-    border-radius:10px;
-    line-height:1.45;
-    max-width:90%;
+  .message {
+    white-space: pre-wrap;   /* ← key: keeps actual line breaks */
+    word-break: break-word;
+    padding: 0.75rem;
+    border-radius: 10px;
+    line-height: 1.45;
+    max-width: 90%;
   }
-
-  /* USER bubble – light-gray */
-  .message.user{
-    background:#f3f4f6;          /* gray-100 */
-    color:#111827;
-    margin-left:auto;            /* push to the right (optional) */
-  }
-
-  /* ASSISTANT bubble – light-green */
-  .message.assistant{
-    background:#dcfce7;          /* green-100 */
-    color:#065f46;               /* green-700 */
-    margin-right:auto;           /* push to the left (optional) */
-  }
-
-  /* keeps the animated dots green too */
-  .message.assistant.typing{ color:#065f46; }
+  .message.user      { background:#f3f4f6; color:#111827; margin-left:auto; }
+  .message.assistant { background:#dcfce7; color:#065f46; margin-right:auto; }
+  .message.assistant.typing { color:#065f46; }
 
     /* 
       Drop area overlay for drag-and-drop
