@@ -78,6 +78,10 @@ log.info("OpenAI client ready (model=%s, assistant=%s)",
 
 # print(f'a.tools={a.tools} , a.tool_resources={a.tool_resources}')
 
+steps = client.beta.threads.runs.list_steps(thread_id=tid, run_id=first.id).data
+print([(s.type, s.status) for s in steps])
+
+
 # ────────────────────────────────────────────────────────────────────────
 # 2. FLASK & DB
 # ────────────────────────────────────────────────────────────────────────
