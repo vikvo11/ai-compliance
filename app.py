@@ -57,8 +57,9 @@ app.config.update(
     SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
+    # SESSION_COOKIE_HTTPONLY=True,
+    # SESSION_COOKIE_SECURE=True, 
+    SESSION_COOKIE_SAMESITE="None",
 )
 db = SQLAlchemy(app)
 os.makedirs("/app/data", exist_ok=True)
@@ -358,6 +359,10 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """POST JSON {"message": "..."} → SSE stream from assistant."""
+    
+    log.info("Cookie headers: %s", request.headers.get("Cookie"))
+    log.info("prev_response_id seen by server: %s", session.get('prev_response_id'))
+    
     msg = (request.json or {}).get("message", "").strip()
     if not msg:
         return jsonify({"error": "Empty message"}), 400
