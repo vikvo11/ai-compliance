@@ -260,120 +260,67 @@ const startDots = el => { let dots=1;
 const stopDots = el => { clearInterval(el._timer); delete el._timer; };
 
 /* Send */
-// --- constants used by the chat widget -----------------------------------
-const PREV_ID_KEY = 'prevID';                             // localStorage key
-let   prevID      = localStorage.getItem(PREV_ID_KEY);    // last response_id
-
 async function sendMessage() {
-  const msg = chatInput.value.trim();
-  if (!msg || chatBusy) return;
+  const msg = chatInput.value.trim(); if (!msg||chatBusy) return;
+  chatBusy=true; chatInput.disabled=true; sendBtn.disabled=true;
 
-  /* UI-state ──────────────────────────────────────────────────────────── */
-  chatBusy = true;
-  chatInput.disabled = true;
-  sendBtn.disabled   = true;
+  addMessage(msg,'message user'); chatInput.value='';
+  const aiDiv = addMessage('','message assistant typing'); startDots(aiDiv);
 
-  addMessage(msg, 'message user');            // user bubble
-  chatInput.value = '';
-
-  const aiDiv = addMessage('', 'message assistant typing');
-  startDots(aiDiv);                           // animated “…”
-
-  /* helper to append assistant chunks */
-  const push = (chunk) => {
-    if (aiDiv.classList.contains('typing')) {
-      stopDots(aiDiv);
-      aiDiv.textContent = '';                 // clear dots
-      aiDiv.classList.remove('typing');
-    }
-    aiDiv.innerHTML += sanitizeHTML(chunk);
-    const pane = chatBox.querySelector('.messages');
-    pane.scrollTop = pane.scrollHeight;
+  const push = chunk=>{
+    if(aiDiv.classList.contains('typing')){ stopDots(aiDiv); aiDiv.innerHTML=''; aiDiv.classList.remove('typing'); }
+    aiDiv.innerHTML+=sanitizeHTML(chunk);
+    chatBox.querySelector('.messages').scrollTop = chatBox.querySelector('.messages').scrollHeight;
   };
 
   try {
-    /* 1) ───────────────────── streaming branch ───────────────────────── */
     if (USE_STREAM) {
       const res = await fetch('/chat/stream', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: msg, previous_response_id: prevID }),
-        credentials: 'include',               // send cookies if any
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ message: msg, previous_response_id: prevID }),
+        credentials:'include'          // cookie if your backend still needs it
       });
-      if (!res.ok || !res.body) throw new Error('Network error');
+      if(!res.ok||!res.body) throw new Error('Network error');
 
-      const rdr = res.body.getReader();
-      const dec = new TextDecoder();
-      let   buf = '';
+      const rdr = res.body.getReader(); const dec = new TextDecoder(); let buf='';
 
-      while (true) {
-        const { value, done } = await rdr.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
+      while(true){
+        const {value,done}=await rdr.read(); if(done) break;
+        buf+=dec.decode(value,{stream:true});
+        const evts=buf.split('\n\n'); buf=evts.pop();
+        for(const ev of evts){
+          if(ev.startsWith('event: done')){ rdr.cancel(); break; }
 
-        /* split by SSE-frame separator */
-        let frameEnd;
-        while ((frameEnd = buf.indexOf('\n\n')) !== -1) {
-          const frame = buf.slice(0, frameEnd);
-          buf = buf.slice(frameEnd + 2);
-
-          /* parse event type */
-          let eventType = 'message';
-          let dataLines = [];
-          for (const line of frame.split('\n')) {
-            if (line.startsWith('event:')) eventType = line.slice(6).trim();
-            if (line.startsWith('data:'))  dataLines.push(line.slice(5));
-          }
-          if (!dataLines.length) continue;
-
-          if (eventType === 'done') {
-            rdr.cancel();
-            break;
+          if(ev.startsWith('event: meta')){      /* server → meta */
+            const data = JSON.parse(ev.split('\n')[1].slice(6));
+            prevID = data.prev_id; localStorage.setItem(PREV_ID_KEY, prevID);
+            continue;
           }
 
-          if (eventType === 'meta') {
-            /* {"prev_id": "..."} from server */
-            try {
-              const meta = JSON.parse(dataLines.join('\n'));
-              if (meta.prev_id) {
-                prevID = meta.prev_id;
-                localStorage.setItem(PREV_ID_KEY, prevID);
-              }
-            } catch { /* ignore malformed meta */ }
-            continue;                       // do not show meta in chat
-          }
-
-          /* default: assistant token */
-          push(dataLines.join('\n'));
+          const chunk=ev.split('\n')
+                        .filter(l=>l.startsWith('data:'))
+                        .map(l=>l.slice(6))
+                        .join('\n');
+          if(chunk) push(chunk);
         }
       }
-
-    /* 2) ─────────────────── fallback (non-stream) ────────────────────── */
-    } else {
+    } else {                                     /* fallback */
       const res = await fetch('/chat', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: msg, previous_response_id: prevID }),
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ message: msg, previous_response_id: prevID })
       });
       const d = await res.json();
       stopDots(aiDiv);
-      aiDiv.innerHTML = sanitizeHTML(d.response || d.error || 'No response');
-
-      if (d.prev_id) {
-        prevID = d.prev_id;
-        localStorage.setItem(PREV_ID_KEY, prevID);
-      }
+      aiDiv.innerHTML=sanitizeHTML(d.response||d.error||'No response');
+      if(d.prev_id){ prevID=d.prev_id; localStorage.setItem(PREV_ID_KEY,prevID); }
     }
-  } catch (err) {
-    console.error(err);
-    stopDots(aiDiv);
-    aiDiv.innerHTML = sanitizeHTML('Error contacting server');
+  } catch(err){
+    console.error(err); stopDots(aiDiv);
+    aiDiv.innerHTML=sanitizeHTML('Error contacting server');
   } finally {
-    chatBusy = false;
-    chatInput.disabled = false;
-    sendBtn.disabled   = false;
-    aiDiv.classList.remove('typing');
-    chatInput.focus();
+    chatBusy=false; chatInput.disabled=false; sendBtn.disabled=false;
+    aiDiv.classList.remove('typing'); chatInput.focus();
   }
 }
 
