@@ -23,8 +23,9 @@ import openai
 from openai import OpenAI
 from flask import (
     Flask, render_template, request, redirect, flash,
-    jsonify, session, Response, copy_current_request_context
+    jsonify, session, Response, copy_current_request_context,
 )
+
 from flask_sqlalchemy import SQLAlchemy
 
 # ─────────────────── 0. LOGGING ──────────────────────────────
@@ -42,8 +43,7 @@ cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-MODEL = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-
+MODEL = cfg.get("DEFAULT", "model",       fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
 if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
@@ -89,7 +89,7 @@ HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
 
 @functools.lru_cache(maxsize=1024)
 def _coords_for(city: str) -> tuple[float, float] | None:
-    """Return (lat, lon) for a given city or None if not found (cached)."""
+    """Return (lat, lon) for a given city or None if not found."""
     r = httpx.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": city, "count": 1},
@@ -204,9 +204,7 @@ def _run_tool(name: str, args: str) -> str:
     except json.JSONDecodeError:
         return f"Bad JSON: {args}"
     fn = DISPATCH.get(name)
-    if not fn:
-        return f"Unknown tool '{name}'"
-    res = fn(**params)
+    res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
 
@@ -214,50 +212,40 @@ def _finish_tool(
     response_id: str,
     thread_id: str | None,
     run_id: str | None,
-    tool_call_id: str,  # <-- This must be the actual call_id from the model
+    tool_call_id: str,
     name: str,
     args_json: str,
-    q: queue.Queue[str | None],
+    q: queue.Queue[Any],                       # ★ allow dict as well
 ) -> str:
-    """
-    Execute the tool, then do a follow-up request to the Responses API
-    with a 'function_call_output' message referencing the correct 'call_id'.
-    """
+    """Execute tool, then make follow-up call with function_call_output."""
     log.info("RUN tool=%s call_id=%s args=%s", name, tool_call_id, args_json)
     output = _run_tool(name, args_json)
 
-    # Perform a follow-up "function_call_output" with the same call_id
-    try:
-        follow = client.responses.create(
-            model=MODEL,
-            input=[
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_call_id,  # must match the original call_id
-                    "output": output,
-                }
-            ],
-            previous_response_id=response_id,
-            tools=TOOLS,
-            stream=True,
-        )
-    except openai.OpenAIError as ex:
-        log.warning("Tool follow-up failed: %s", ex)
-        return response_id
+    follow = client.responses.create(
+        model=MODEL,
+        input=[
+            {
+                "type": "function_call_output",
+                "call_id": tool_call_id,
+                "output": output,
+            }
+        ],
+        previous_response_id=response_id,
+        tools=TOOLS,
+        stream=True,
+    )
 
     return _pipe(follow, q, thread_id, run_id)
 
 
 def _pipe(
     stream,
-    q: queue.Queue[str | None],
+    q: queue.Queue[Any],                        # ★ allow dict as well
     thread_id: str | None = None,
     run_id: str | None = None,
 ) -> str:
     """Parse streaming events from Responses API and forward to SSE queue."""
     response_id = ""
-    # For storing partial data about ongoing function calls
-    # Key: the "id" from the item (fc_...)
     buf: dict[str, dict[str, Any]] = {}
 
     for ev in stream:
@@ -267,7 +255,6 @@ def _pipe(
         thread_id = getattr(ev, "thread_id", thread_id)
         run_id = getattr(ev, "run_id", run_id)
 
-        # Track new response_id if present
         if getattr(ev, "response", None):
             response_id = ev.response.id
             thread_id = getattr(ev.response, "thread_id", thread_id)
@@ -290,20 +277,13 @@ def _pipe(
                     if getattr(tc, "function", None)
                     else getattr(tc, "arguments", None)
                 )
-
-                # must retrieve the real call_id for correct follow-up
                 call_id = getattr(tc, "call_id", None) or tc.id
                 buf[tc.id] = {"name": fn_name, "parts": [], "call_id": call_id}
 
                 if full_args:
                     response_id = _finish_tool(
-                        response_id,
-                        thread_id,
-                        run_id,
-                        call_id,
-                        fn_name,
-                        full_args,
-                        q,
+                        response_id, thread_id, run_id,
+                        call_id, fn_name, full_args, q
                     )
 
         # ── new schema: response.output_item.added ────────────
@@ -319,7 +299,7 @@ def _pipe(
                 else item_obj.model_dump(exclude_none=True)
             )
             if item and item.get("type") in ("function_call", "tool_call"):
-                iid = item["id"]  # typically "fc_..."
+                iid = item["id"]
                 fname = (
                     item.get("function", {}).get("name")
                     or item.get("tool_call", {}).get("name")
@@ -348,36 +328,39 @@ def _pipe(
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
                 fn_name = buf[iid]["name"]
-                the_call_id = buf[iid]["call_id"]  # must use call_id, not iid
+                the_call_id = buf[iid]["call_id"]
 
                 response_id = _finish_tool(
-                    response_id,
-                    thread_id,
-                    run_id,
-                    the_call_id,
-                    fn_name,
-                    full_json,
-                    q
+                    response_id, thread_id, run_id,
+                    the_call_id, fn_name, full_json, q
                 )
                 buf.pop(iid, None)
 
         # Final markers
         if typ in ("response.done", "response.completed", "response.output_text.done"):
+            # ★ отправляем response_id в очередь, чтобы основной поток сохранил его в сессии
+            q.put({"resp_id": response_id})     # ★
             q.put(None)
             return response_id
 
-    # If we exit loop unexpectedly, still close the SSE
+    q.put({"resp_id": response_id})             # ★ fallback
     q.put(None)
     return response_id
 
 
 # ─────────────────── 5. SSE GENERATOR ────────────────────────
-def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
+def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
     """Generate Server-Sent Events stream from queue with keep-alive pings."""
     keep_alive = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
+            # ★ специальный словарь с новым response_id
+            if isinstance(tok, dict) and "resp_id" in tok:               # ★
+                session["prev_response_id"] = tok["resp_id"]             # ★
+                session.modified = True                                  # ★
+                continue                                                 # ★
+
             if tok is None:
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
@@ -392,54 +375,26 @@ def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
 # ─────────────────── 6. CHAT ENDPOINT ───────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """
-    POST JSON {message: "..."} → SSE stream with the assistant reply.
-    Utilizes previous_response_id from session to preserve context.
-    """
+    """POST JSON {message: "..."} → SSE stream with assistant reply."""
     msg = (request.json or {}).get("message", "").strip()
     if not msg:
         return jsonify({"error": "Empty message"}), 400
 
     last_resp_id = session.get("prev_response_id")
-    q: queue.Queue[str | None] = queue.Queue()
+    q: queue.Queue[Any] = queue.Queue()
 
     @copy_current_request_context
     def work() -> None:
-        """
-        Create a new response with `previous_response_id` so that
-        the conversation continues from the last assistant answer.
-        If it fails due to an invalid or expired response_id,
-        we reset it to None and retry once (new conversation).
-        """
-        nonlocal last_resp_id
-
-        def do_request(prev_id: str | None) -> str | None:
-            try:
-                stream = client.responses.create(
-                    model=MODEL,
-                    input=msg,
-                    previous_response_id=prev_id,
-                    tools=TOOLS,
-                    tool_choice="auto",
-                    parallel_tool_calls=False,   # sequential
-                    stream=True,
-                )
-                return _pipe(stream, q)
-            except openai.OpenAIError as ex:
-                log.warning("OpenAIError with prev_id=%s -> %s", prev_id, ex)
-                return None
-
-        # First attempt with stored previous_response_id
-        new_id = do_request(last_resp_id)
-        if not new_id:
-            # Possibly previous_response_id is invalid/outdated
-            # Try again with no context
-            new_id = do_request(None)
-        if new_id:
-            session["prev_response_id"] = new_id
-        else:
-            # If still no success, clear session var
-            session["prev_response_id"] = None
+        stream = client.responses.create(
+            model=MODEL,
+            input=msg,
+            previous_response_id=last_resp_id,
+            tools=TOOLS,
+            tool_choice="auto",
+            parallel_tool_calls=False,
+            stream=True,
+        )
+        _pipe(stream, q)                         # ★ session обновится в генераторе SSE
 
     threading.Thread(target=work, daemon=True).start()
     return Response(
@@ -451,19 +406,9 @@ def chat_stream():
         },
     )
 
-
-@app.route("/chat/reset", methods=["POST", "GET"])
-def chat_reset():
-    """
-    Optional route to explicitly reset the conversation.
-    This clears session["prev_response_id"] so the next message starts fresh.
-    """
-    session["prev_response_id"] = None
-    flash("Chat context was reset.")
-    return redirect("/")
-
-
 # ─────────────────── 7. CSV / CRUD ROUTES ────────────────────
+# (без изменений)
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -567,7 +512,6 @@ def export_invoice(invoice_id: int | None = None):
             "Content-Disposition": f'attachment; filename="{fname}"',
         },
     )
-
 
 # ─────────────────── 8. RUN ──────────────────────────────────
 if __name__ == "__main__":
