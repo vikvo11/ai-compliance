@@ -131,7 +131,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """Look up an invoice in the DB and return a dict or an error dict."""
+    """Look up an invoice in the DB and return dict or error."""
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     return (
         {"error": f"Invoice {invoice_id} not found"}
@@ -156,15 +156,12 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "location": {
-                    "type": "string",
-                    "description": "City name"
-                },
+                "location": {"type": "string", "description": "City name"},
                 "unit": {
                     "type": ["string", "null"],
                     "enum": ["celsius", "fahrenheit", None],
                     "description": "Temperature unit (default celsius).",
-                    "default": "celsius"
+                    "default": "celsius",
                 },
             },
             "required": ["location", "unit"],
@@ -179,10 +176,7 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "invoice_id": {
-                    "type": "string",
-                    "description": "Invoice identifier"
-                }
+                "invoice_id": {"type": "string", "description": "Invoice identifier"}
             },
             "required": ["invoice_id"],
             "additionalProperties": False,
@@ -243,13 +237,13 @@ def _pipe(stream, q: queue.Queue[str | None],
     Simpler logic: rely on `event.type`.
     """
     response_id = ""
-    buf: dict[str, dict[str, Any]] = {}            # Stores partial args
+    buf: dict[str, dict[str, Any]] = {}
 
     for ev in stream:
         et = getattr(ev, "type", "")
         delta = getattr(ev, "delta", None)
 
-        # Track response/thread/run ids
+        # Track ids
         if hasattr(ev, "response") and ev.response:
             response_id = ev.response.id
             thread_id = getattr(ev.response, "thread_id", thread_id)
@@ -257,7 +251,7 @@ def _pipe(stream, q: queue.Queue[str | None],
 
         # ───── Text deltas ─────────────────────────────
         if et == "response.output_text.delta" and isinstance(delta, str):
-            q.put(delta)                            # immediate push
+            q.put(delta)
             continue
 
         # ───── Error handling ─────────────────────────
@@ -267,10 +261,19 @@ def _pipe(stream, q: queue.Queue[str | None],
             q.put(None)
             return response_id
 
-        # ───── Tool call (new schema) ────────────────
+        # ───── Tool call (item added) ────────────────
         if et == "response.output_item.added":
-            item = ev.item if hasattr(ev, "item") else ev.output_item
-            if item and item["type"] in ("function_call", "tool_call"):
+            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None)
+            if not item_obj:   # fallback: dict with key 'item'
+                item_obj = ev.model_dump(exclude_none=True).get("item")
+            if not item_obj:
+                continue
+            item = (
+                item_obj
+                if isinstance(item_obj, dict)
+                else item_obj.model_dump(exclude_none=True)
+            )
+            if item.get("type") in ("function_call", "tool_call"):
                 iid = item["id"]
                 buf[iid] = {
                     "name": item.get("function", {}).get("name") or
@@ -282,14 +285,18 @@ def _pipe(stream, q: queue.Queue[str | None],
 
         # ───── Arguments chunks ──────────────────────
         if et == "response.tool_call.arguments.delta":
-            iid = ev.tool_call_id
+            iid = getattr(ev, "tool_call_id", None) or \
+                  getattr(ev, "item_id", None) or \
+                  getattr(ev, "output_item_id", None)
             if iid in buf:
                 buf[iid]["parts"].append(delta or "")
             continue
 
         # ───── End-of-arguments ──────────────────────
         if et == "response.tool_call.arguments.done":
-            iid = ev.tool_call_id
+            iid = getattr(ev, "tool_call_id", None) or \
+                  getattr(ev, "item_id", None) or \
+                  getattr(ev, "output_item_id", None)
             if iid in buf:
                 args_str = "".join(buf[iid]["parts"])
                 fn_name = buf[iid]["name"]
@@ -312,24 +319,23 @@ def _pipe(stream, q: queue.Queue[str | None],
 # ─────────────────── 5. SSE GENERATOR ────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
     """
-    SSE generator that:
-    * immediately forwards each token (ensuring low-latency flush)
+    SSE generator:
+    * immediately forwards each token (low-latency flush)
     * emits keep-alive pings
-    * sends final `[DONE]` event and closes.
+    * final `[DONE]` event closes the stream
     """
     keep_alive = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
-            if tok is None:                         # finished
+            if tok is None:
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
-            # Each chunk is tiny → WSGI/uwsgi flushes right away
             yield f"data: {tok}\n\n".encode()
             keep_alive = time.time() + 20
         except queue.Empty:
             if time.time() > keep_alive:
-                yield b": ping\n\n"                # comment → keep-alive
+                yield b": ping\n\n"
                 keep_alive = time.time() + 20
 
 # ─────────────────── 6. CHAT ENDPOINT ───────────────────────
@@ -362,9 +368,9 @@ def chat_stream():
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",              # disable Nginx buffering
+            "X-Accel-Buffering": "no",
         },
-        direct_passthrough=True                    # flush ASAP
+        direct_passthrough=True
     )
 
 # ─────────────────── 7. CSV / CRUD ROUTES ────────────────────
