@@ -357,7 +357,7 @@ async function sendMessage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg }),
-        credentials: 'same-origin'
+        credentials: 'include'
       });
       if (!res.ok || !res.body) throw new Error('Network error');
 
