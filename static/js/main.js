@@ -1,532 +1,437 @@
-# app.py
-# -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling, strict mode) — SDK ≥ 1.78
+/* main.js */
+/* Comments in English as requested. -------------------------------------------
+   – Drag-&-drop CSV upload
+   – Invoice editing + toast notifications
+   – Fancy demo animations / crack-glass effect
+   – Light/night theme toggle
+   – Streaming chat (SSE) with:
+       • user bubbles (grey) / assistant bubbles (light-green)
+       • chatBusy flag blocks double-send
+       • animated “…” while GPT thinks
+       • compact ↔ expanded view
+   – FIX: in compact mode the chat-box now has a fixed height (420 px) so the
+          textarea/footer always stays at the bottom.
+------------------------------------------------------------------------------- */
 
-from __future__ import annotations
+/* --------------------------------
+   1) CONSTANTS
+----------------------------------- */
+const COMPACT_HEIGHT = '420px';  // fixed height when folded
+const USE_STREAM     = true;     // switch to `/chat` if false
 
-import os
-import sys
-import time
-import json
-import queue
-import threading
-import asyncio
-import functools
-import logging
-from collections.abc import Generator
-from typing import Any
-
-import httpx
-import pandas as pd
-import configparser
-import openai
-from openai import OpenAI
-from flask import (
-    Flask, render_template, request, redirect, flash,
-    jsonify, session, Response, copy_current_request_context
-)
-from flask_sqlalchemy import SQLAlchemy
-
-# ─────────────────── 0. LOGGING ──────────────────────────────
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S%z",
-    force=True,
-)
-log = logging.getLogger("app")
-
-# ─────────────────── 1. OPENAI ───────────────────────────────
-cfg = configparser.ConfigParser()
-cfg.read("cfg/openai.cfg")
-
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-MODEL = cfg.get("DEFAULT", "model",       fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-if not OPENAI_API_KEY:
-    log.critical("OPENAI_API_KEY missing")
-    sys.exit(1)
-
-client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)   # new-style client
-
-# ─────────────────── 2. FLASK & DB ───────────────────────────
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
-app.config.update(
-    SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
-    SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    MAX_CONTENT_LENGTH=5 * 1024 * 1024,  # 5 MB upload limit
-)
-db = SQLAlchemy(app)
-os.makedirs("/app/data", exist_ok=True)
-
-
-class Client(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(128), unique=True, nullable=False)
-    email = db.Column(db.String(128))
-    invoices = db.relationship(
-        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
-    )
-
-
-class Invoice(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    invoice_id = db.Column(db.String(64), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    date_due = db.Column(db.String(64), nullable=False)
-    status = db.Column(db.String(32), nullable=False)
-    client_id = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
-
-
-with app.app_context():
-    db.create_all()
-
-# ─────────────────── 3. TOOL FUNCTIONS ───────────────────────
-HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
-
-
-@functools.lru_cache(maxsize=1024)
-def _coords_for(city: str) -> tuple[float, float] | None:
-    """Return (lat, lon) for a given city or None if not found."""
-    r = httpx.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": city, "count": 1},
-        timeout=HTTP_TIMEOUT,
-    )
-    res = r.json().get("results")
-    return None if not res else (res[0]["latitude"], res[0]["longitude"])
-
-
-async def _weather_for_async(lat: float, lon: float) -> dict:
-    """Async request to current-weather endpoint."""
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
-        r = await ac.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
-        )
-    return r.json().get("current_weather", {})
-
-
-def _run_sync(coro: asyncio.Future) -> Any:
-    """Run coroutine in a safe way whether we are in an event loop or not."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    else:
-        return loop.run_until_complete(coro)
-
-
-def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """Return temperature string for the location, converting units if needed."""
-    coords = _coords_for(location)
-    cw = _run_sync(_weather_for_async(*coords)) if coords else None
-    if not cw:
-        return f"Location '{location}' not found."
-    temp = cw["temperature"]
-    temp = round(temp * 9 / 5 + 32, 1) if unit == "fahrenheit" else temp
-    return f"The temperature in {location} is {temp} {'°F' if unit == 'fahrenheit' else '°C'}."
-
-
-def get_invoice_by_id(invoice_id: str) -> dict:
-    """Look up an invoice in the database and return a dict or an error dict."""
-    inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
-    return (
-        {"error": f"Invoice {invoice_id} not found"}
-        if not inv
-        else {
-            "invoice_id": inv.invoice_id,
-            "amount": inv.amount,
-            "date_due": inv.date_due,
-            "status": inv.status,
-            "client_name": inv.client.name,
-            "client_email": inv.client.email,
-        }
-    )
-
-# ─────────────────── 3a. TOOLS SCHEMA (strict) ───────────────
-TOOLS = [
-    {
-        "type": "function",
-        "name": "get_current_weather",
-        "description": "Get the current weather for a city.",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "location": {
-                    "type": "string",
-                    "description": "City name"
-                },
-                "unit": {
-                    "type": ["string", "null"],
-                    "enum": ["celsius", "fahrenheit", None],
-                    "description": "Temperature unit (default celsius).",
-                    "default": "celsius"
-                },
-            },
-            "required": ["location", "unit"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "get_invoice_by_id",
-        "description": "Return invoice data for a given invoice number.",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "invoice_id": {
-                    "type": "string",
-                    "description": "Invoice identifier"
-                }
-            },
-            "required": ["invoice_id"],
-            "additionalProperties": False,
-        },
-    },
-]
-
-# Maps tool names to local Python callables.
-DISPATCH = {
-    "get_current_weather": get_current_weather,
-    "get_invoice_by_id": get_invoice_by_id,
+/* --------------------------------
+   2) HELPER: Simple sanitize for HTML
+   Removes <script> tags to mitigate basic XSS.
+   For production use DOMPurify or a robust sanitization library.
+----------------------------------- */
+function sanitizeHTML(str) {
+  // Remove <script>...</script> blocks
+  return str.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
 }
 
-# ─────────────────── 4. STREAM HANDLER ───────────────────────
-def _run_tool(name: str, args: str) -> str:
-    """Execute a tool locally and always return a string (JSON for dicts)."""
-    try:
-        params = json.loads(args or "{}")
-    except json.JSONDecodeError:
-        return f"Bad JSON: {args}"
-    fn = DISPATCH.get(name)
-    res = fn(**params) if fn else f"Unknown tool {name}"
-    return json.dumps(res) if isinstance(res, dict) else str(res)
+/* --------------------------------
+   3) DRAG-AND-DROP FOR CSV
+----------------------------------- */
+let dragCounter = 0;
+function handleDragOver(e) {
+  e.preventDefault();
+}
+function handleDragLeave(e) {
+  e.preventDefault();
+  dragCounter--;
+  if (!dragCounter) {
+    document.getElementById('drop-area').style.display = 'none';
+  }
+}
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  document.getElementById('drop-area').style.display = 'flex';
+});
+function handleDrop(e) {
+  e.preventDefault();
+  dragCounter = 0;
+  document.getElementById('drop-area').style.display = 'none';
+  const f = e.dataTransfer.files;
+  if (f.length && f[0].type === 'text/csv') {
+    const fd = new FormData();
+    fd.append('csv_file', f[0]);
+    fetch('/', { method: 'POST', body: fd })
+      .then(r => { if (!r.ok) throw new Error(); location.reload(); })
+      .catch(() => alert('Upload failed'));
+  } else {
+    alert('Please drop a valid CSV file.');
+  }
+}
+document.addEventListener('dragover', handleDragOver);
+document.addEventListener('dragleave', handleDragLeave);
+document.addEventListener('drop', handleDrop);
 
+function toggleInvoices() {
+  const t = document.getElementById('invoiceTable');
+  t.style.display = (t.style.display === 'none') ? 'block' : 'none';
+}
 
-def _finish_tool(
-    response_id: str,
-    thread_id: str | None,
-    run_id: str | None,
-    tool_call_id: str,  # <-- This must be the actual call_id from the model
-    name: str,
-    args_json: str,
-    q: queue.Queue[str | None],
-) -> str:
-    """
-    Execute the tool, then do a follow-up request to the Responses API
-    with a 'function_call_output' message referencing the correct 'call_id'.
-    """
-    log.info("RUN tool=%s call_id=%s args=%s", name, tool_call_id, args_json)
-    output = _run_tool(name, args_json)
+/* --------------------------------
+   4) FADE-IN ON SCROLL
+----------------------------------- */
+document.querySelectorAll('.fade').forEach(el => {
+  const io = new IntersectionObserver(e => {
+    if (e[0].isIntersecting) {
+      el.classList.add('show');
+      io.unobserve(el);
+    }
+  }, { threshold: 0.3 });
+  io.observe(el);
+});
 
-    # Perform a follow-up "function_call_output" with the same call_id
-    follow = client.responses.create(
-        model=MODEL,
-        input=[
-            {
-                "type": "function_call_output",
-                "call_id": tool_call_id,  # must match the original call_id
-                "output": output,
-            }
-        ],
-        previous_response_id=response_id,
-        tools=TOOLS,
-        stream=True,
-    )
+/* --------------------------------
+   5) TOAST
+----------------------------------- */
+function showToast(msg) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => {
+    t.style.opacity = '0';
+    setTimeout(() => c.removeChild(t), 800);
+  }, 3000);
+}
 
-    return _pipe(follow, q, thread_id, run_id)
+/* --------------------------------
+   6) SAVE INVOICE
+----------------------------------- */
+async function saveInvoice(e, id) {
+  e.preventDefault();
+  try {
+    const fd = new FormData(e.target);
+    const r  = await fetch(`/edit/${id}`, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    document.getElementById(`invoice-${id}-client`).textContent    = d.client_name;
+    document.getElementById(`invoice-${id}-invoiceID`).textContent = d.invoice_id;
+    document.getElementById(`invoice-${id}-amount`).textContent    = `$${(+d.amount).toFixed(2)}`;
+    document.getElementById(`invoice-${id}-due`).textContent       = d.date_due;
+    document.getElementById(`invoice-${id}-status`).textContent    = d.status;
+    document.getElementById(`edit-row-${id}`).style.display        = 'none';
+    showToast('Invoice updated successfully!');
+  } catch {
+    showToast('Error updating invoice.');
+  }
+}
+const toggleEdit = id => {
+  const row = document.getElementById(`edit-row-${id}`);
+  row.style.display = (row.style.display === 'none') ? 'table-row' : 'none';
+};
 
+/* --------------------------------
+   7) TYPE EFFECT & TERMINAL DEMOS
+----------------------------------- */
+function typeInto(el, txt, speed = 60, cb) {
+  let i = 0;
+  (function t() {
+    if (i < txt.length) {
+      if ('placeholder' in el) {
+        el.placeholder = txt.slice(0, ++i);
+      } else {
+        el.value += txt[i++ - 1];
+      }
+      setTimeout(t, speed);
+    } else {
+      cb?.();
+    }
+  })();
+}
+function printLines(id, lines, delay = 900) {
+  const el = document.getElementById(id);
+  let i = 0;
+  (function n() {
+    if (i < lines.length) {
+      el.innerHTML += lines[i++] + '<br>';
+      setTimeout(n, delay);
+    } else {
+      el.innerHTML += '<span class="cursor"></span>';
+    }
+  })();
+}
+const onceVisible = (sel, cb) => {
+  const el = document.querySelector(sel);
+  if (!el) return;
+  const io = new IntersectionObserver(e => {
+    if (e[0].isIntersecting) { cb(); io.disconnect(); }
+  }, { threshold: 0.5 });
+  io.observe(el);
+};
 
-def _pipe(
-    stream,
-    q: queue.Queue[str | None],
-    thread_id: str | None = None,
-    run_id: str | None = None,
-) -> str:
-    """Parse streaming events from Responses API and forward to SSE queue."""
-    response_id = ""
-    # For storing partial data about ongoing function calls
-    # Key: the "id" from the item (fc_...)
-    buf: dict[str, dict[str, Any]] = {}
+/* triggers for the demos */
+onceVisible('#demo', () => {
+  typeInto(companyField, 'Acme Corporation', 60, () => {
+    setTimeout(() => typeInto(reportField, 'Q4 Revenue Report'), 300);
+    setTimeout(() => typeInto(dateField, '31 Jan 2025'), 800);
+  });
+  printLines('terminal-main', [
+    '> AI.extractData("report.pdf")',
+    '→ Filling form fields…',
+    '→ Uploading to portal…',
+    '→ Status: ✅ Filed Successfully!'
+  ]);
+});
+onceVisible('#actions', () => {
+  printLines('term-extract', [
+    '> AI.parse("invoices.zip")',
+    '→ 124 invoices processed',
+    '→ Data normalized ✅'
+  ]);
+  setTimeout(() => printLines('term-search', [
+    '> AI.vectorSearch("FCC Part 69")',
+    '→ 5 relevant clauses found',
+    '→ Mapping to form fields… ✅'
+  ]), 800);
+  setTimeout(() => printLines('term-submit', [
+    '> AI.RPA.submit("FCC-499A")',
+    '→ Authenticating…',
+    '→ Uploading PDF…',
+    '→ Submission ID: #8842 ✅'
+  ]), 1600);
+});
 
-    for ev in stream:
-        typ = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
-        delta = getattr(ev, "delta", None)
+/* --------------------------------
+   8) CRACK-GLASS ANIMATION
+----------------------------------- */
+function crackGlass() {
+  const block = document.getElementById('ai-extract-block');
+  const cv    = document.getElementById('crack-effect');
+  if (!cv) return;
+  const ctx   = cv.getContext('2d');
+  if (!ctx) return;
 
-        thread_id = getattr(ev, "thread_id", thread_id)
-        run_id = getattr(ev, "run_id", run_id)
+  cv.style.display = 'block';
+  cv.style.opacity = '1';
+  cv.style.transition = '';
+  cv.width  = 300;
+  cv.height = 200;
+  ctx.clearRect(0, 0, cv.width, cv.height);
 
-        if getattr(ev, "response", None):
-            response_id = ev.response.id
-            thread_id = getattr(ev.response, "thread_id", thread_id)
-            run_id = getattr(ev.response, "run_id", run_id)
+  navigator.vibrate?.([100, 50, 100]);
+  block.classList.add('vibrate');
+  setTimeout(() => block.classList.remove('vibrate'), 700);
 
-        # Plain text tokens
-        if isinstance(delta, str) and "arguments" not in typ:
-            q.put(delta)
+  const [cx, cy] = [cv.width / 2, cv.height / 2];
+  for (let i = 0; i < 24; i++) {
+    const ang = i * Math.PI * 2 / 24, len = 50 + Math.random() * 100;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(ang) * len, cy + Math.sin(ang) * len);
+    ctx.strokeStyle = `rgba(100,100,100,${0.5 + Math.random() * 0.5})`;
+    ctx.lineWidth   = 0.5 + Math.random() * 2;
+    ctx.stroke();
+  }
+  for (let r = 20; r <= 100; r += 20) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + Math.random() * 5, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(120,120,120,${Math.random() * 0.4 + 0.3})`;
+    ctx.lineWidth   = 0.3 + Math.random();
+    ctx.stroke();
+  }
+  setTimeout(() => {
+    cv.style.transition = 'opacity .8s';
+    cv.style.opacity    = '0';
+    setTimeout(() => {
+      cv.style.display   = 'none';
+      cv.style.transition = '';
+    }, 800);
+  }, 1300);
+}
 
-        # ── old schema: response.tool_calls ───────────────────
-        if getattr(ev, "tool_calls", None):
-            for tc in ev.tool_calls:
-                fn_name = (
-                    getattr(tc, "function", None).name
-                    if getattr(tc, "function", None)
-                    else getattr(tc, "name", None)
-                )
-                full_args = (
-                    getattr(tc, "function", None).arguments
-                    if getattr(tc, "function", None)
-                    else getattr(tc, "arguments", None)
-                )
+/* --------------------------------
+   9) DOM-READY SETUP
+----------------------------------- */
+document.addEventListener('DOMContentLoaded', () => {
+  // Setup initial chat box state
+  chatBox.style.display = 'none';
+  chatBox.style.width   = '340px';
+  chatBox.style.height  = COMPACT_HEIGHT; 
+  chatBox.querySelector('.messages').style.maxHeight = '300px';
 
-                # Important: must retrieve the real call_id for correct follow-up
-                call_id = getattr(tc, "call_id", None) or tc.id
+  document.getElementById('expand-chat')?.addEventListener('click', () => {
+    if (chatBox.style.width === '600px') {
+      /* collapse */
+      chatBox.style.width            = '340px';
+      chatBox.style.height           = COMPACT_HEIGHT;
+      chatBox.querySelector('.messages').style.maxHeight = '300px';
+    } else {
+      /* expand */
+      chatBox.style.display          = 'flex';
+      chatBox.style.flexDirection    = 'column';
+      chatBox.style.width            = '600px';
+      chatBox.style.height           = '80vh';
+      chatBox.querySelector('.messages').style.maxHeight = '';
+    }
+  });
+  document.getElementById('ai-extract-block')?.addEventListener('click', crackGlass);
+});
 
-                buf[tc.id] = {"name": fn_name, "parts": [], "call_id": call_id}
+/* --------------------------------
+   10) CHAT
+----------------------------------- */
+const launcher  = document.getElementById('chat-launcher');
+const chatBox   = document.getElementById('chat-box');
+const chatInput = chatBox.querySelector('textarea');
+const sendBtn   = chatBox.querySelector('button.send');
 
-                if full_args:
-                    response_id = _finish_tool(
-                        response_id,
-                        thread_id,
-                        run_id,
-                        call_id,  # pass the real call_id
-                        fn_name,
-                        full_args,
-                        q,
-                    )
+let chatBusy = false;
 
-        # ── new schema: response.output_item.added ────────────
-        if typ == "response.output_item.added":
-            item_obj = (
-                getattr(ev, "item", None)
-                or getattr(ev, "output_item", None)
-                or ev.model_dump(exclude_none=True).get("item")
-            )
-            item = (
-                item_obj
-                if isinstance(item_obj, dict)
-                else item_obj.model_dump(exclude_none=True)
-            )
-            if item and item.get("type") in ("function_call", "tool_call"):
-                iid = item["id"]  # typically "fc_..."
-                fname = (
-                    item.get("function", {}).get("name")
-                    or item.get("tool_call", {}).get("name")
-                    or item.get("name")
-                )
-                # The critical piece: get the model's "call_id" if present
-                call_id = item.get("call_id") or iid
+/* Create message bubble (HTML-safe) */
+function addMessage(txt, cls = 'message') {
+  const d = document.createElement('div');
+  d.className = cls;
+  // Use sanitized HTML content
+  d.innerHTML = sanitizeHTML(txt);
+  const pane = chatBox.querySelector('.messages');
+  pane.appendChild(d);
+  pane.scrollTop = pane.scrollHeight;
+  return d;
+}
 
-                buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
+/* Chat launcher (open/close) */
+launcher.addEventListener('click', () => {
+  if (chatBox.style.display === 'flex') {
+    chatBox.style.display = 'none';
+    return;
+  }
+  chatBox.style.display      = 'flex';
+  chatBox.style.flexDirection = 'column';
+  chatInput.disabled         = false;
+  sendBtn.disabled           = false;
+  chatInput.focus();
+});
 
-        # Accumulate argument deltas
-        if "arguments.delta" in typ:
-            iid = (
-                getattr(ev, "output_item_id", None)
-                or getattr(ev, "item_id", None)
-                or getattr(ev, "tool_call_id", None)
-            )
-            if iid and iid in buf:
-                buf[iid]["parts"].append(delta or "")
+/* "..." animation */
+const startDots = (el) => {
+  let dots = 1;
+  el.textContent = '.';
+  el._timer = setInterval(() => {
+    dots = (dots % 3) + 1;
+    el.textContent = '.'.repeat(dots);
+  }, 400);
+};
+const stopDots = (el) => {
+  clearInterval(el._timer);
+  delete el._timer;
+};
 
-        # End-of-arguments → execute tool
-        if typ.endswith("arguments.done"):
-            iid = (
-                getattr(ev, "output_item_id", None)
-                or getattr(ev, "item_id", None)
-                or getattr(ev, "tool_call_id", None)
-            )
-            if iid and iid in buf:
-                full_json = "".join(buf[iid]["parts"])
-                fn_name = buf[iid]["name"]
-                the_call_id = buf[iid]["call_id"]  # must use call_id, not iid
+/* Send message */
+async function sendMessage() {
+  const msg = chatInput.value.trim();
+  if (!msg || chatBusy) return;
 
-                response_id = _finish_tool(
-                    response_id,
-                    thread_id,
-                    run_id,
-                    the_call_id,  # pass the correct call_id
-                    fn_name,
-                    full_json,
-                    q
-                )
-                buf.pop(iid, None)
+  chatBusy = true;
+  chatInput.disabled = true;
+  sendBtn.disabled   = true;
 
-        # Final markers
-        if typ in ("response.done", "response.completed", "response.output_text.done"):
-            q.put(None)
-            return response_id
+  // user bubble
+  addMessage(msg, 'message user');
+  chatInput.value = '';
 
-    q.put(None)
-    return response_id
+  // assistant bubble
+  const aiDiv = addMessage('', 'message assistant typing');
+  startDots(aiDiv);
 
+  const push = chunk => {
+    if (aiDiv.classList.contains('typing')) {
+      stopDots(aiDiv);
+      aiDiv.innerHTML = ''; // clear any "..."
+      aiDiv.classList.remove('typing');
+    }
+    // Append sanitized chunk
+    aiDiv.innerHTML += sanitizeHTML(chunk);
+    chatBox.querySelector('.messages').scrollTop =
+      chatBox.querySelector('.messages').scrollHeight;
+  };
 
-# ─────────────────── 5. SSE GENERATOR ────────────────────────
-def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
-    """Generate Server-Sent Events stream from queue with keep-alive pings."""
-    keep_alive = time.time() + 20
-    while True:
-        try:
-            tok = q.get(timeout=1)
-            if tok is None:
-                yield b"event: done\ndata: [DONE]\n\n"
-                break
-            yield f"data: {tok}\n\n".encode()
-            keep_alive = time.time() + 20
-        except queue.Empty:
-            if time.time() > keep_alive:
-                yield b": ping\n\n"
-                keep_alive = time.time() + 20
+  try {
+    if (USE_STREAM) {
+      const res = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg })
+      });
+      if (!res.ok || !res.body) throw new Error('Network error');
 
+      const rdr = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf   = '';
 
-# ─────────────────── 6. CHAT ENDPOINT ───────────────────────
-@app.route("/chat/stream", methods=["POST"])
-def chat_stream():
-    """POST JSON {message: "..."} → SSE stream with the assistant reply."""
-    msg = (request.json or {}).get("message", "").strip()
-    if not msg:
-        return jsonify({"error": "Empty message"}), 400
+      while (true) {
+        const { value, done } = await rdr.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop(); // keep leftover in buffer
+for (const ev of parts) {
+  if (ev.startsWith('event: done')) { rdr.cancel(); break; }
 
-    last_resp_id = session.get("prev_response_id")
-    q: queue.Queue[str | None] = queue.Queue()
+  /* collect every "data: …" line inside the event */
+  const chunk = ev
+    .split('\n')                  // physical SSE lines
+    .filter(line => line.startsWith('data:'))
+    .map(line  => line.slice(6))  // strip "data: "
+    .join('\n');                  // restore original line breaks
 
-    @copy_current_request_context
-    def work() -> None:
-        stream = client.responses.create(
-            model=MODEL,
-            input=msg,
-            previous_response_id=last_resp_id,
-            tools=TOOLS,
-            tool_choice="auto",
-            parallel_tool_calls=False,   # sequential processing
-            stream=True,
-        )
-        session["prev_response_id"] = _pipe(stream, q)
+  if (chunk) push(chunk);
+}
+      }
+    } else {
+      // Non-stream fallback
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg })
+      });
+      const d = await res.json();
+      stopDots(aiDiv);
+      aiDiv.innerHTML = sanitizeHTML(d.response || d.error || 'No response');
+    }
+  } catch (err) {
+    console.error(err);
+    stopDots(aiDiv);
+    aiDiv.innerHTML = sanitizeHTML('Error contacting server');
+  } finally {
+    chatBusy = false;
+    chatInput.disabled = false;
+    sendBtn.disabled   = false;
+    aiDiv.classList.remove('typing');
+    chatInput.focus();
+  }
+}
 
-    threading.Thread(target=work, daemon=True).start()
-    return Response(
-        sse(q),
-        mimetype="text/event-stream",
-        headers={
-            "X-Accel-Buffering": "no",
-            "Cache-Control": "no-cache, no-transform",
-        },
-    )
+/* On send button click or Enter key */
+sendBtn.addEventListener('click', sendMessage);
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
 
-
-# ─────────────────── 7. CSV / CRUD ROUTES ────────────────────
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        f = request.files.get("csv_file")
-        if not f or not f.filename.endswith(".csv"):
-            flash("Please upload a valid CSV file.")
-            return redirect(request.url)
-
-        t0 = time.perf_counter()
-        df = pd.read_csv(f)
-        new_clients: dict[str, Client] = {}
-        invoices: list[Invoice] = []
-        for _, row in df.iterrows():
-            name = row["client_name"]
-            cl = Client.query.filter_by(name=name).first() or new_clients.get(name)
-            if not cl:
-                cl = Client(name=name, email=row.get("client_email") or "")
-                new_clients[name] = cl
-            invoices.append(
-                Invoice(
-                    invoice_id=row["invoice_id"],
-                    amount=row["amount"],
-                    date_due=row["date_due"],
-                    status=row["status"],
-                    client=cl,
-                )
-            )
-        db.session.add_all(new_clients.values())
-        db.session.add_all(invoices)
-        db.session.commit()
-        log.info(
-            "CSV import %d invoices, %d new clients in %.3f s",
-            len(invoices),
-            len(new_clients),
-            time.perf_counter() - t0,
-        )
-        flash("Invoices uploaded successfully.")
-        return redirect("/")
-    return render_template("index.html", invoices=Invoice.query.all())
-
-
-@app.route("/edit/<int:invoice_id>", methods=["POST"])
-def edit_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
-    inv.amount = request.form["amount"]
-    inv.date_due = request.form["date_due"]
-    inv.status = request.form["status"]
-    inv.client.email = request.form["client_email"]
-    db.session.commit()
-    log.info("Invoice %d updated", invoice_id)
-    return jsonify(
-        {
-            "client_name": inv.client.name,
-            "invoice_id": inv.invoice_id,
-            "amount": inv.amount,
-            "date_due": inv.date_due,
-            "status": inv.status,
-        }
-    )
-
-
-@app.route("/delete/<int:invoice_id>", methods=["POST"])
-def delete_invoice(invoice_id: int):
-    inv = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(inv)
-    db.session.commit()
-    log.info("Invoice %d deleted", invoice_id)
-    flash("Invoice deleted.")
-    return redirect("/")
-
-
-@app.route("/export")
-@app.route("/export/<int:invoice_id>")
-def export_invoice(invoice_id: int | None = None):
-    rows = (
-        [Invoice.query.get_or_404(invoice_id)]
-        if invoice_id
-        else Invoice.query.all()
-    )
-    csv_data = pd.DataFrame(
-        [
-            {
-                "client_name": r.client.name,
-                "client_email": r.client.email,
-                "invoice_id": r.invoice_id,
-                "amount": r.amount,
-                "date_due": r.date_due,
-                "status": r.status,
-            }
-            for r in rows
-        ]
-    ).to_csv(index=False)
-
-    fname = f"invoice_{invoice_id or 'all'}.csv"
-    log.info("Export %s", fname)
-    return (
-        csv_data,
-        200,
-        {
-            "Content-Type": "text/csv",
-            "Content-Disposition": f'attachment; filename="{fname}"',
-        },
-    )
-
-
-# ─────────────────── 8. RUN ──────────────────────────────────
-if __name__ == "__main__":
-    print("openai-python version:", openai.__version__)   # e.g. 1.78.0
-    if tuple(map(int, openai.__version__.split(".")[:2])) < (1, 7):
-        sys.exit("openai-python ≥ 1.7.0 is required for function calling.")
-    app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
+/* --------------------------------
+   11) AUTO THEME
+----------------------------------- */
+(() => {
+  const hr = new Date().getHours();
+  if (hr >= 19 || hr < 6) {
+    document.body.classList.add('night-theme');
+    document.getElementById('star-background')?.style.setProperty('display', 'block');
+  }
+})();
+document.getElementById('theme-toggle')?.addEventListener('click', () => {
+  const body  = document.body;
+  const stars = document.getElementById('star-background');
+  const night = body.classList.toggle('night-theme');
+  if (stars) {
+    stars.style.display = night ? 'block' : 'none';
+  }
+  localStorage.setItem('theme', night ? 'night' : 'light');
+});
