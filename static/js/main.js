@@ -356,7 +356,8 @@ async function sendMessage() {
       const res = await fetch('/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg })
+        body: JSON.stringify({ message: msg }),
+        credentials: 'same-origin'
       });
       if (!res.ok || !res.body) throw new Error('Network error');
 
