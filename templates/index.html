@@ -11,7 +11,12 @@
   -->
   <style>
   /* … everything above stays the same … */
+.chat-bubble {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.35;
 
+}
   /* shared bubble styling */
   .message{
     padding:0.75rem;
@@ -32,6 +37,7 @@
     background:#dcfce7;          /* green-100 */
     color:#065f46;               /* green-700 */
     margin-right:auto;           /* push to the left (optional) */
+    white-space: pre-line; /* or pre-wrap */
   }
 
   /* keeps the animated dots green too */
