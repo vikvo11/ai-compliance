@@ -42,8 +42,7 @@ cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-MODEL = cfg.get("DEFAULT", "model", fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-
+MODEL = cfg.get("DEFAULT", "model",       fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
 if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
@@ -89,7 +88,7 @@ HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
 
 @functools.lru_cache(maxsize=1024)
 def _coords_for(city: str) -> tuple[float, float] | None:
-    """Return (lat, lon) for a given city or None if not found (cached)."""
+    """Return (lat, lon) for a given city or None if not found."""
     r = httpx.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": city, "count": 1},
@@ -204,9 +203,7 @@ def _run_tool(name: str, args: str) -> str:
     except json.JSONDecodeError:
         return f"Bad JSON: {args}"
     fn = DISPATCH.get(name)
-    if not fn:
-        return f"Unknown tool '{name}'"
-    res = fn(**params)
+    res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
 
@@ -227,23 +224,19 @@ def _finish_tool(
     output = _run_tool(name, args_json)
 
     # Perform a follow-up "function_call_output" with the same call_id
-    try:
-        follow = client.responses.create(
-            model=MODEL,
-            input=[
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_call_id,  # must match the original call_id
-                    "output": output,
-                }
-            ],
-            previous_response_id=response_id,
-            tools=TOOLS,
-            stream=True,
-        )
-    except openai.OpenAIError as ex:
-        log.warning("Tool follow-up failed: %s", ex)
-        return response_id
+    follow = client.responses.create(
+        model=MODEL,
+        input=[
+            {
+                "type": "function_call_output",
+                "call_id": tool_call_id,  # must match the original call_id
+                "output": output,
+            }
+        ],
+        previous_response_id=response_id,
+        tools=TOOLS,
+        stream=True,
+    )
 
     return _pipe(follow, q, thread_id, run_id)
 
@@ -267,7 +260,6 @@ def _pipe(
         thread_id = getattr(ev, "thread_id", thread_id)
         run_id = getattr(ev, "run_id", run_id)
 
-        # Track new response_id if present
         if getattr(ev, "response", None):
             response_id = ev.response.id
             thread_id = getattr(ev.response, "thread_id", thread_id)
@@ -291,8 +283,9 @@ def _pipe(
                     else getattr(tc, "arguments", None)
                 )
 
-                # must retrieve the real call_id for correct follow-up
+                # Important: must retrieve the real call_id for correct follow-up
                 call_id = getattr(tc, "call_id", None) or tc.id
+
                 buf[tc.id] = {"name": fn_name, "parts": [], "call_id": call_id}
 
                 if full_args:
@@ -300,7 +293,7 @@ def _pipe(
                         response_id,
                         thread_id,
                         run_id,
-                        call_id,
+                        call_id,  # pass the real call_id
                         fn_name,
                         full_args,
                         q,
@@ -325,7 +318,9 @@ def _pipe(
                     or item.get("tool_call", {}).get("name")
                     or item.get("name")
                 )
+                # The critical piece: get the model's "call_id" if present
                 call_id = item.get("call_id") or iid
+
                 buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
         # Accumulate argument deltas
@@ -354,7 +349,7 @@ def _pipe(
                     response_id,
                     thread_id,
                     run_id,
-                    the_call_id,
+                    the_call_id,  # pass the correct call_id
                     fn_name,
                     full_json,
                     q
@@ -366,7 +361,6 @@ def _pipe(
             q.put(None)
             return response_id
 
-    # If we exit loop unexpectedly, still close the SSE
     q.put(None)
     return response_id
 
@@ -392,10 +386,7 @@ def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
 # ─────────────────── 6. CHAT ENDPOINT ───────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """
-    POST JSON {message: "..."} → SSE stream with the assistant reply.
-    Utilizes previous_response_id from session to preserve context.
-    """
+    """POST JSON {message: "..."} → SSE stream with the assistant reply."""
     msg = (request.json or {}).get("message", "").strip()
     if not msg:
         return jsonify({"error": "Empty message"}), 400
@@ -405,41 +396,16 @@ def chat_stream():
 
     @copy_current_request_context
     def work() -> None:
-        """
-        Create a new response with `previous_response_id` so that
-        the conversation continues from the last assistant answer.
-        If it fails due to an invalid or expired response_id,
-        we reset it to None and retry once (new conversation).
-        """
-        nonlocal last_resp_id
-
-        def do_request(prev_id: str | None) -> str | None:
-            try:
-                stream = client.responses.create(
-                    model=MODEL,
-                    input=msg,
-                    previous_response_id=prev_id,
-                    tools=TOOLS,
-                    tool_choice="auto",
-                    parallel_tool_calls=False,   # sequential
-                    stream=True,
-                )
-                return _pipe(stream, q)
-            except openai.OpenAIError as ex:
-                log.warning("OpenAIError with prev_id=%s -> %s", prev_id, ex)
-                return None
-
-        # First attempt with stored previous_response_id
-        new_id = do_request(last_resp_id)
-        if not new_id:
-            # Possibly previous_response_id is invalid/outdated
-            # Try again with no context
-            new_id = do_request(None)
-        if new_id:
-            session["prev_response_id"] = new_id
-        else:
-            # If still no success, clear session var
-            session["prev_response_id"] = None
+        stream = client.responses.create(
+            model=MODEL,
+            input=msg,
+            previous_response_id=last_resp_id,
+            tools=TOOLS,
+            tool_choice="auto",
+            parallel_tool_calls=False,   # sequential processing
+            stream=True,
+        )
+        session["prev_response_id"] = _pipe(stream, q)
 
     threading.Thread(target=work, daemon=True).start()
     return Response(
@@ -450,17 +416,6 @@ def chat_stream():
             "Cache-Control": "no-cache, no-transform",
         },
     )
-
-
-@app.route("/chat/reset", methods=["POST", "GET"])
-def chat_reset():
-    """
-    Optional route to explicitly reset the conversation.
-    This clears session["prev_response_id"] so the next message starts fresh.
-    """
-    session["prev_response_id"] = None
-    flash("Chat context was reset.")
-    return redirect("/")
 
 
 # ─────────────────── 7. CSV / CRUD ROUTES ────────────────────
