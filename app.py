@@ -339,6 +339,10 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
         try:
             tok = q.get(timeout=1)
 
+            if isinstance(tok, dict) and "meta" in tok:
+                yield b"event: meta\ndata: " + json.dumps(tok["meta"]).encode() + b"\n\n"
+                continue
+
             if isinstance(tok, dict) and "resp_id" in tok:
                 session["prev_response_id"] = tok["resp_id"]
                 session.modified = True
