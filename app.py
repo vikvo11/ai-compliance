@@ -24,8 +24,8 @@ from openai import OpenAI
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context,
+    stream_with_context,                         # ★ ADDED
 )
-
 from flask_sqlalchemy import SQLAlchemy
 
 # ─────────────────── 0. LOGGING ──────────────────────────────
@@ -158,13 +158,13 @@ TOOLS = [
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "City name"
+                    "description": "City name",
                 },
                 "unit": {
                     "type": ["string", "null"],
                     "enum": ["celsius", "fahrenheit", None],
                     "description": "Temperature unit (default celsius).",
-                    "default": "celsius"
+                    "default": "celsius",
                 },
             },
             "required": ["location", "unit"],
@@ -181,8 +181,8 @@ TOOLS = [
             "properties": {
                 "invoice_id": {
                     "type": "string",
-                    "description": "Invoice identifier"
-                }
+                    "description": "Invoice identifier",
+                },
             },
             "required": ["invoice_id"],
             "additionalProperties": False,
@@ -215,7 +215,7 @@ def _finish_tool(
     tool_call_id: str,
     name: str,
     args_json: str,
-    q: queue.Queue[Any],                       # ★ allow dict as well
+    q: queue.Queue[Any],
 ) -> str:
     """Execute tool, then make follow-up call with function_call_output."""
     log.info("RUN tool=%s call_id=%s args=%s", name, tool_call_id, args_json)
@@ -240,12 +240,16 @@ def _finish_tool(
 
 def _pipe(
     stream,
-    q: queue.Queue[Any],                        # ★ allow dict as well
+    q: queue.Queue[Any],
     thread_id: str | None = None,
     run_id: str | None = None,
 ) -> str:
-    """Parse streaming events from Responses API and forward to SSE queue."""
+    """
+    Parse streaming events from Responses API and forward to SSE queue.
+    Puts `{"resp_id": ...}` in the queue as soon as it is known and exactly once.
+    """
     response_id = ""
+    resp_pushed = False                     # ★ ADDED
     buf: dict[str, dict[str, Any]] = {}
 
     for ev in stream:
@@ -259,6 +263,9 @@ def _pipe(
             response_id = ev.response.id
             thread_id = getattr(ev.response, "thread_id", thread_id)
             run_id = getattr(ev.response, "run_id", run_id)
+            if not resp_pushed:             # ★ push once, as early as possible
+                q.put({"resp_id": response_id})
+                resp_pushed = True
 
         # Plain text tokens
         if isinstance(delta, str) and "arguments" not in typ:
@@ -338,12 +345,9 @@ def _pipe(
 
         # Final markers
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            # ★ отправляем response_id в очередь, чтобы основной поток сохранил его в сессии
-            q.put({"resp_id": response_id})     # ★
             q.put(None)
             return response_id
 
-    q.put({"resp_id": response_id})             # ★ fallback
     q.put(None)
     return response_id
 
@@ -355,15 +359,17 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
     while True:
         try:
             tok = q.get(timeout=1)
-            # ★ специальный словарь с новым response_id
-            if isinstance(tok, dict) and "resp_id" in tok:               # ★
-                session["prev_response_id"] = tok["resp_id"]             # ★
-                session.modified = True                                  # ★
-                continue                                                 # ★
+
+            # Special dict carrying resp_id from _pipe
+            if isinstance(tok, dict) and "resp_id" in tok:       # ★ CHANGED
+                session["prev_response_id"] = tok["resp_id"]     # ★
+                session.modified = True                          # ★
+                continue
 
             if tok is None:
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
+
             yield f"data: {tok}\n\n".encode()
             keep_alive = time.time() + 20
         except queue.Empty:
@@ -391,14 +397,14 @@ def chat_stream():
             previous_response_id=last_resp_id,
             tools=TOOLS,
             tool_choice="auto",
-            parallel_tool_calls=False,
+            parallel_tool_calls=False,   # sequential processing
             stream=True,
         )
-        _pipe(stream, q)                         # ★ session обновится в генераторе SSE
+        _pipe(stream, q)
 
     threading.Thread(target=work, daemon=True).start()
     return Response(
-        sse(q),
+        stream_with_context(sse(q)),         # ★ CHANGED
         mimetype="text/event-stream",
         headers={
             "X-Accel-Buffering": "no",
