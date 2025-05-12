@@ -49,7 +49,7 @@ if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
 
-client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
+client = OpenAI(api_key=OPENAI_API_KEY, timeout=45, max_retries=3)
 
 # ─────────────────── 2. FLASK & DB ───────────────────────────
 app = Flask(__name__)
@@ -91,11 +91,16 @@ HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
 @functools.lru_cache(maxsize=1024)
 def _coords_for(city: str) -> tuple[float, float] | None:
     """Return (lat, lon) for a given city or None if not found."""
-    r = httpx.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": city, "count": 1},
-        timeout=HTTP_TIMEOUT,
-    )
+    try:
+        r = httpx.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1},
+            timeout=HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        log.warning("geocoding error: %s", e)
+        return None
     res = r.json().get("results")
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
@@ -111,7 +116,7 @@ async def _weather_for_async(lat: float, lon: float) -> dict:
 
 
 def _run_sync(coro: asyncio.Future) -> Any:
-    """Run coroutine in a safe way whether we are in an event loop or not."""
+    """Run coroutine in or out of an event loop."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -120,7 +125,7 @@ def _run_sync(coro: asyncio.Future) -> Any:
 
 
 def get_current_weather(location: str, unit: str = "celsius") -> str:
-    """Return temperature string for the location, converting units if needed."""
+    """Return temperature string for the location."""
     coords = _coords_for(location)
     cw = _run_sync(_weather_for_async(*coords)) if coords else None
     if not cw:
@@ -131,7 +136,7 @@ def get_current_weather(location: str, unit: str = "celsius") -> str:
 
 
 def get_invoice_by_id(invoice_id: str) -> dict:
-    """Look up an invoice in the DB and return dict or error."""
+    """Look up an invoice and return dict or error."""
     inv = Invoice.query.filter_by(invoice_id=invoice_id).first()
     return (
         {"error": f"Invoice {invoice_id} not found"}
@@ -191,7 +196,7 @@ DISPATCH = {
 
 # ─────────────────── 4. STREAM UTILITIES ─────────────────────
 def _run_tool(name: str, args_json: str) -> str:
-    """Execute a tool locally and always return a **string**."""
+    """Execute a tool locally and always return a string."""
     try:
         params = json.loads(args_json or "{}")
     except json.JSONDecodeError:
@@ -204,7 +209,7 @@ def _run_tool(name: str, args_json: str) -> str:
 def _follow_up(response_id: str, call_id: str, output: str,
                thread_id: str | None, run_id: str | None,
                q: queue.Queue[str | None]) -> str:
-    """Send `function_call_output` and continue streaming."""
+    """Send function_call_output and keep streaming."""
     follow = client.responses.create(
         model=MODEL,
         input=[{
@@ -223,107 +228,110 @@ def _follow_up(response_id: str, call_id: str, output: str,
 def _finish_tool(response_id: str, call_id: str, fn_name: str,
                  args_str: str, thread_id: str | None,
                  run_id: str | None, q: queue.Queue[str | None]) -> str:
-    """Execute tool + continue dialog."""
+    """Execute tool then continue dialog."""
     log.info("RUN tool=%s call_id=%s args=%s", fn_name, call_id, args_str)
+    t0 = time.perf_counter()
     output = _run_tool(fn_name, args_str)
+    log.info("tool %s finished in %.2f s", fn_name, time.perf_counter() - t0)
     return _follow_up(response_id, call_id, output, thread_id, run_id, q)
 
 
 def _pipe(stream, q: queue.Queue[str | None],
           thread_id: str | None = None,
           run_id: str | None = None) -> str:
-    """
-    Convert OpenAI stream events → plain text tokens in `q`.
-    Simpler logic: rely on `event.type`.
-    """
+    """Convert OpenAI stream events → plain-text tokens in queue."""
     response_id = ""
     buf: dict[str, dict[str, Any]] = {}
 
-    for ev in stream:
-        et = getattr(ev, "type", "")
-        delta = getattr(ev, "delta", None)
+    try:
+        for ev in stream:
+            et = getattr(ev, "type", "")
+            delta = getattr(ev, "delta", None)
 
-        # Track ids
-        if hasattr(ev, "response") and ev.response:
-            response_id = ev.response.id
-            thread_id = getattr(ev.response, "thread_id", thread_id)
-            run_id = getattr(ev.response, "run_id", run_id)
+            # IDs
+            if hasattr(ev, "response") and ev.response:
+                response_id = ev.response.id
+                thread_id = getattr(ev.response, "thread_id", thread_id)
+                run_id = getattr(ev.response, "run_id", run_id)
 
-        # ───── Text deltas ─────────────────────────────
-        if et == "response.output_text.delta" and isinstance(delta, str):
-            q.put(delta)
-            continue
-
-        # ───── Error handling ─────────────────────────
-        if et == "response.error":
-            log.error("OpenAI error: %s", ev)
-            q.put(f"\n[Error: {getattr(ev, 'message', 'unknown')}]")
-            q.put(None)
-            return response_id
-
-        # ───── Tool call (item added) ────────────────
-        if et == "response.output_item.added":
-            item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None)
-            if not item_obj:   # fallback: dict with key 'item'
-                item_obj = ev.model_dump(exclude_none=True).get("item")
-            if not item_obj:
+            # ───── Text ──────────────────────────────────────
+            if et == "response.output_text.delta" and isinstance(delta, str):
+                q.put(delta)
                 continue
-            item = (
-                item_obj
-                if isinstance(item_obj, dict)
-                else item_obj.model_dump(exclude_none=True)
-            )
-            if item.get("type") in ("function_call", "tool_call"):
-                iid = item["id"]
-                buf[iid] = {
-                    "name": item.get("function", {}).get("name") or
-                            item.get("tool_call", {}).get("name"),
-                    "parts": [],
-                    "call_id": item.get("call_id") or iid
-                }
-            continue
 
-        # ───── Arguments chunks ──────────────────────
-        if et == "response.tool_call.arguments.delta":
-            iid = getattr(ev, "tool_call_id", None) or \
-                  getattr(ev, "item_id", None) or \
-                  getattr(ev, "output_item_id", None)
-            if iid in buf:
-                buf[iid]["parts"].append(delta or "")
-            continue
+            # ───── Errors ────────────────────────────────────
+            if et == "response.error":
+                msg = getattr(ev, "message", "unknown")
+                log.error("OpenAI error: %s", msg)
+                q.put(f"\n[Error] {msg}")
+                q.put(None)
+                return response_id
 
-        # ───── End-of-arguments ──────────────────────
-        if et == "response.tool_call.arguments.done":
-            iid = getattr(ev, "tool_call_id", None) or \
-                  getattr(ev, "item_id", None) or \
-                  getattr(ev, "output_item_id", None)
-            if iid in buf:
-                args_str = "".join(buf[iid]["parts"])
-                fn_name = buf[iid]["name"]
-                call_id = buf[iid]["call_id"]
-                response_id = _finish_tool(
-                    response_id, call_id, fn_name, args_str,
-                    thread_id, run_id, q
+            # ───── Tool call: item added ─────────────────────
+            if et == "response.output_item.added":
+                item_obj = getattr(ev, "item", None) or getattr(ev, "output_item", None)
+                if not item_obj:
+                    item_obj = ev.model_dump(exclude_none=True).get("item")
+                if not item_obj:
+                    continue
+                item = (
+                    item_obj
+                    if isinstance(item_obj, dict)
+                    else item_obj.model_dump(exclude_none=True)
                 )
-                buf.pop(iid, None)
-            continue
+                if item.get("type") in ("function_call", "tool_call"):
+                    iid = item["id"]
+                    buf[iid] = {
+                        "name": item.get("function", {}).get("name") or
+                                item.get("tool_call", {}).get("name"),
+                        "parts": [],
+                        "call_id": item.get("call_id") or iid
+                    }
+                continue
 
-        # ───── End markers ───────────────────────────
-        if et in ("response.done", "response.output_text.done"):
-            q.put(None)
-            return response_id
+            # ───── Args delta ────────────────────────────────
+            if et == "response.tool_call.arguments.delta":
+                iid = getattr(ev, "tool_call_id", None)
+                if iid in buf:
+                    buf[iid]["parts"].append(delta or "")
+                continue
 
-    q.put(None)
+            # ───── Args done ─────────────────────────────────
+            if et == "response.tool_call.arguments.done":
+                iid = getattr(ev, "tool_call_id", None)
+                if iid in buf:
+                    args_str = "".join(buf[iid]["parts"])
+                    fn_name = buf[iid]["name"]
+                    call_id = buf[iid]["call_id"]
+                    response_id = _finish_tool(
+                        response_id, call_id, fn_name, args_str,
+                        thread_id, run_id, q
+                    )
+                    buf.pop(iid, None)
+                continue
+
+            # ───── End markers ───────────────────────────────
+            if et in ("response.done", "response.output_text.done"):
+                q.put(None)
+                return response_id
+    except Exception as e:
+        log.exception("stream handler failed")
+        q.put(f"\n[Error] {e}")
+        q.put(None)
     return response_id
 
-# ─────────────────── 5. SSE GENERATOR ────────────────────────
+# ─────────────────── 5. SSE HELPERS ──────────────────────────
+def _safe_put_final(q: queue.Queue[str | None], msg: str | None = None) -> None:
+    """Ensure queue gets final sentinel even on error."""
+    try:
+        if msg:
+            q.put(msg)
+    finally:
+        q.put(None)
+
+# ─────────────────── 6. SSE GENERATOR ────────────────────────
 def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
-    """
-    SSE generator:
-    * immediately forwards each token (low-latency flush)
-    * emits keep-alive pings
-    * final `[DONE]` event closes the stream
-    """
+    """SSE generator with keep-alive."""
     keep_alive = time.time() + 20
     while True:
         try:
@@ -338,31 +346,35 @@ def sse(q: queue.Queue[str | None]) -> Generator[bytes, None, None]:
                 yield b": ping\n\n"
                 keep_alive = time.time() + 20
 
-# ─────────────────── 6. CHAT ENDPOINT ───────────────────────
+# ─────────────────── 7. CHAT ENDPOINT ───────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """POST JSON {message} → SSE stream with assistant reply."""
+    """POST JSON {message} → SSE stream."""
     msg = (request.json or {}).get("message", "").strip()
     if not msg:
         return jsonify({"error": "Empty message"}), 400
 
     last_id = session.get("prev_response_id")
-    q: queue.Queue[str | None] = queue.Queue()
+    q: queue.Queue[str | None] = queue.Queue(maxsize=1000)
 
     @copy_current_request_context
     def worker() -> None:
-        stream = client.responses.create(
-            model=MODEL,
-            input=msg,
-            previous_response_id=last_id,
-            tools=TOOLS,
-            tool_choice="auto",
-            parallel_tool_calls=False,
-            stream=True,
-        )
-        session["prev_response_id"] = _pipe(stream, q)
+        try:
+            stream = client.responses.create(
+                model=MODEL,
+                input=msg,
+                previous_response_id=last_id,
+                tools=TOOLS,
+                tool_choice="auto",
+                parallel_tool_calls=False,
+                stream=True,
+            )
+            session["prev_response_id"] = _pipe(stream, q)
+        except Exception as e:
+            log.exception("worker failed")
+            _safe_put_final(q, f"[Error] {e}")
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=worker, daemon=True, name="openai-stream").start()
     return Response(
         sse(q),
         mimetype="text/event-stream",
@@ -370,10 +382,10 @@ def chat_stream():
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
-        direct_passthrough=True
+        direct_passthrough=True,
     )
 
-# ─────────────────── 7. CSV / CRUD ROUTES ────────────────────
+# ─────────────────── 8. CSV / CRUD ROUTES ────────────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -476,9 +488,9 @@ def export_invoice(invoice_id: int | None = None):
         },
     )
 
-# ─────────────────── 8. RUN ──────────────────────────────────
+# ─────────────────── 9. RUN ──────────────────────────────────
 if __name__ == "__main__":
-    print("openai-python version:", openai.__version__)  # e.g. 1.78.0
+    print("openai-python version:", openai.__version__)   # e.g. 1.78.0
     if tuple(map(int, openai.__version__.split(".")[:2])) < (1, 7):
         sys.exit("openai-python ≥ 1.7 is required for function calling.")
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
