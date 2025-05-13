@@ -62,6 +62,10 @@ document.addEventListener('dragover', handleDragOver);
 document.addEventListener('dragleave', handleDragLeave);
 document.addEventListener('drop', handleDrop);
 
+function toggleInvoices() {
+  const t = document.getElementById('invoiceTable');
+  t.style.display = (t.style.display === 'none') ? 'block' : 'none';
+}
 /* --------------------------------
    4) FADE-IN ON SCROLL
 ----------------------------------- */
