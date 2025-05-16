@@ -215,39 +215,39 @@ TOOLS = [
     },
     {
         "type": "function",
-        "function": {
-            "name": "fcc_search_filings",
-            "description": "Search FCC ECFS for all PDF attachments of a company",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "company": {
-                        "type": "string",
-                        "description": "Company name to search for",
-                    },
+        "name": "fcc_search_filings",
+        "description": "Search FCC ECFS for all PDF attachments of a company",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "company": {
+                    "type": "string",
+                    "description": "Company name to search for",
                 },
-                "required": ["company"],
             },
+            "required": ["company"],
+            "additionalProperties": False,
         },
+        "strict": True,
     },
     {
         "type": "function",
-        "function": {
-            "name": "fcc_get_filings_text",
-            "description": "Download & parse selected FCC ECFS PDFs and return text",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "company": {"type": "string"},
-                    "indexes": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                        "description": "1-based indexes from fcc_search_filings",
-                    },
+        "name": "fcc_get_filings_text",
+        "description": "Download & parse selected FCC ECFS PDFs and return text",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "company": {"type": "string"},
+                "indexes": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "1-based indexes from fcc_search_filings",
                 },
-                "required": ["company", "indexes"],
             },
+            "required": ["company", "indexes"],
+            "additionalProperties": False,
         },
+        "strict": True,
     },
 ]
 
