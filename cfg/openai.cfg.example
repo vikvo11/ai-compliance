@@ -3,3 +3,4 @@ OPENAI_API_KEY=your-openai-key-here
 model=gpt-3.5-turbo
 system_prompt=You are a helpful assistant for telecom compliance.
 assistant_id=replace-with-your-assistant-id
+FCC_API_KEY=your-fcc-api-key
