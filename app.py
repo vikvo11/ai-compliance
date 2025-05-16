@@ -226,7 +226,7 @@ TOOLS = [
                 },
             },
             "required": ["company"],
-            "additionalProperties": False,
+            "additionalProperties": False
         },
         "strict": True,
     },
@@ -245,7 +245,7 @@ TOOLS = [
                 },
             },
             "required": ["company", "indexes"],
-            "additionalProperties": False,
+            "additionalProperties": False
         },
         "strict": True,
     },
