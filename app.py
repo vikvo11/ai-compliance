@@ -56,7 +56,7 @@ FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
 if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
 
-import fcc_ecfs   # after the env var is set
+import fcc_ecfs                   # after the env var is set
 
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
@@ -65,8 +65,6 @@ app.config.update(
     SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
-    # SESSION_COOKIE_HTTPONLY=True,
-    # SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_SAMESITE="None",
 )
 db = SQLAlchemy(app)
@@ -112,7 +110,6 @@ def _coords_for(city: str) -> tuple[float, float] | None:
     except httpx.HTTPError as exc:
         log.error("Weather geocoding failed: %s", exc)
         return None
-
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
@@ -169,17 +166,25 @@ def get_invoice_by_id(invoice_id: str) -> dict:
     )
 
 
-# ──────────── FCC wrappers (use fcc_ecfs module) ────────────
+# ────────── FCC wrappers (use fcc_ecfs module) ──────────
 def fcc_search_filings(company: str) -> list[dict]:
     """Return numbered list of PDFs for company."""
-    return fcc_ecfs.search(company)
+    try:
+        return fcc_ecfs.search(company)
+    except Exception as exc:
+        log.exception("FCC search failed")
+        return {"error": str(exc)}
 
 
 def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
     """Download & parse selected FCC PDFs (1-based indexes)."""
-    return fcc_ecfs.get_texts(company, indexes)
+    try:
+        return fcc_ecfs.get_texts(company, indexes)
+    except Exception as exc:
+        log.exception("FCC get_texts failed")
+        return {"error": str(exc)}
 
-# ───────────────────────── 3a. TOOL SCHEMA ───────────────────
+# ───────────────────── 3a. TOOL SCHEMA ──────────────────────
 TOOLS = [
     {
         "type": "function",
@@ -196,7 +201,7 @@ TOOLS = [
                 "unit": {
                     "type": ["string", "null"],
                     "enum": ["celsius", "fahrenheit", None],
-                    "description": "Temperature unit; omit for celsius",
+                    "description": "Temperature unit; omit or null = celsius",
                     "default": "celsius",
                 },
             },
@@ -271,13 +276,25 @@ DISPATCH = {
 
 # ─────────────────────── 4. STREAM HANDLER ───────────────────
 def _run_tool(name: str, args: str) -> str:
-    """Invoke a tool and always return a string (JSON if dict)."""
+    """
+    Invoke a tool *safely* and always return a string
+    (JSON-encoded if the tool returns a dict).
+    """
     try:
         params = json.loads(args or "{}")
     except json.JSONDecodeError:
         return f"Bad JSON: {args}"
+
     fn = DISPATCH.get(name)
-    res = fn(**params) if fn else f"Unknown tool {name}"
+    if not fn:
+        return f"Unknown tool {name}"
+
+    try:
+        res = fn(**params)
+    except Exception as exc:
+        log.exception("Tool %s raised error", name)
+        res = {"error": str(exc)}
+
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
 
@@ -289,7 +306,7 @@ def _finish_tool(
     args_json: str,
     q: queue.Queue[Any],
 ) -> str:
-    """Execute the local tool and stream its output back to the model."""
+    """Execute local tool and stream its output back to the model."""
     output = _run_tool(name, args_json or "{}")
 
     follow = client.responses.create(
@@ -313,50 +330,47 @@ def _pipe(
 ) -> str:
     """
     Parse streaming events, forward assistant text to queue (as SSE `data:`),
-    execute tool-calls, and, ONE TIME, push:
-      • `meta` with new `prev_id` early (so the browser can cache it)
-      • `resp_id` only when the turn is fully completed.
+    execute tool-calls, and emit:
+      • `meta` (new prev_id) early
+      • `resp_id` when the turn fully succeeds
     """
     response_id  = ""
-    meta_sent    = False                # guard for a single meta push
-    early_text: list[str] = []          # buffer tokens until meta is sent
-    buf: dict[str, dict[str, Any]] = {} # temp storage for tool-call args
+    meta_sent    = False
+    early_text: list[str] = []
+    buf: dict[str, dict[str, Any]] = {}
 
     for ev in stream:
         typ   = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
         delta = getattr(ev, "delta", None)
         run_id = getattr(ev, "run_id", run_id)
 
-        # ───────────── first fragment with whole Response ──────────────
+        # ───────── first fragment with whole Response ─────────
         if getattr(ev, "response", None):
             response_id = ev.response.id
-
-            # send meta only once and before any user-visible text
             if not meta_sent:
                 q.put({"meta": {"prev_id": response_id}})
-                for t in early_text:     # flush buffered tokens
+                for t in early_text:
                     q.put(t)
                 early_text.clear()
                 meta_sent = True
 
-        # ───────────── plain-text token (assistant stream) ─────────────
+        # ───────── plain text tokens ─────────
         if isinstance(delta, str) and "arguments" not in typ:
             (q.put if meta_sent else early_text.append)(delta)
 
-        # ───────────── legacy `tool_calls` array ───────────────────────
+        # ───────── legacy tool_calls ─────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 fn_name   = tc.function.name if getattr(tc, "function", None) else tc.name
                 full_args = tc.function.arguments if getattr(tc, "function", None) else tc.arguments
                 call_id   = getattr(tc, "call_id", None) or tc.id
                 buf[tc.id] = {"name": fn_name, "parts": [], "call_id": call_id}
-                # Always execute the tool, even if args are empty
                 response_id = _finish_tool(
                     response_id, run_id,
                     call_id, fn_name, full_args or "{}", q
                 )
 
-        # ───────────── new output_item schema ──────────────────────────
+        # ───────── new output_item schema ─────────
         if typ == "response.output_item.added":
             item = (
                 getattr(ev, "item", None)
@@ -374,7 +388,7 @@ def _pipe(
                     call_id = item.get("call_id") or iid
                     buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
-        # ───────────── accumulate argument chunks ──────────────────────
+        # ───────── accumulate arg chunks ─────────
         if "arguments.delta" in typ:
             iid = (
                 getattr(ev, "output_item_id", None)
@@ -384,7 +398,7 @@ def _pipe(
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
-        # ───────────── end-of-args → run tool ──────────────────────────
+        # ───────── end-of-args → run tool ─────────
         if typ.endswith("arguments.done"):
             iid = (
                 getattr(ev, "output_item_id", None)
@@ -402,20 +416,18 @@ def _pipe(
                 )
                 buf.pop(iid, None)
 
-        # ───────────── turn completed ──────────────────────────────────
+        # ───────── turn completed ─────────
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            # Mark this turn as fully successful – safe to reuse prev_id
             q.put({"resp_id": response_id})
-            q.put(None)             # sentinel for SSE generator
+            q.put(None)
             return response_id
 
-    # Stream exhausted without an explicit done (edge-case / error)
     q.put(None)
     return response_id
 
-# ─────────────────── 5. SSE GENERATOR ────────────────────────
+# ─────────────────── 5. SSE GENERATOR ────────────────────
 def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
-    """Convert queue events to SSE. Also update session with prev_response_id."""
+    """Convert queue events to SSE and keep session.prev_response_id updated."""
     keep_alive = time.time() + 20
     while True:
         try:
@@ -442,22 +454,14 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
                 yield b": ping\n\n"
                 keep_alive = time.time() + 20
 
-# ─────────────────────── 6. CHAT ENDPOINT ────────────────────
+# ─────────────────────── 6. CHAT ENDPOINT ───────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """
     POST JSON  {
-        "message":              "<user text>",
-        "previous_response_id": "<id from last meta event, optional>"
+      "message":              "<user text>",
+      "previous_response_id": "<id from last meta event, optional>"
     }
-
-    Returns an SSE stream with:
-      • assistant tokens       → event: <default> data: …
-      • meta containing new ID → event: meta      data: {"prev_id": "..."}
-      • completion sentinel    → event: done      data: [DONE]
-
-    The browser should save prev_id (localStorage, etc.) and include it in the
-    next POST. Cookies are no longer required.
     """
     data = request.get_json(force=True, silent=True) or {}
     msg  = (data.get("message") or "").strip()
@@ -492,7 +496,7 @@ def chat_stream():
         },
     )
 
-# ─────────────────── 7. CSV IMPORT / CRUD ROUTES ─────────────
+# ─────────────────── 7. CSV IMPORT / CRUD ROUTES ────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -581,10 +585,10 @@ def export_invoice(invoice_id: int | None = None):
         csv_data,
         200,
         {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename="{fname}"'},
+         "Content-Disposition": f'attachment; filename=\"{fname}\"'},
     )
 
-# ───────────────────────── 8. RUN APP ────────────────────────
+# ───────────────────────── 8. RUN APP ───────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
     if tuple(map(int, openai.__version__.split(".")[:2])) < (1, 7):
