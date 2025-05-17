@@ -57,6 +57,14 @@ if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
 # ----------------------------------------------------------------------
 import fcc_ecfs
+
+# ──────────────────── instructions for Responses API ────────────
+try:
+    with open("responcess_api_instructions.cfg", "r", encoding="utf-8") as f:
+        INSTRUCTIONS = f.read().strip()
+except OSError as exc:
+    log.warning("Failed to load instructions.cfg: %s", exc)
+    INSTRUCTIONS = ""
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
@@ -174,7 +182,7 @@ def fcc_search_filings(company: str) -> list[dict]:
 
 
 def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
-    """Download & parse selected FCC PDFs (1-based indexes)."""
+    """Download and parse the selected FCC PDFs without saving them."""
     return fcc_ecfs.get_texts(company, indexes)
 
 # ───────────────────────── 3a. TOOL SCHEMA ───────────────────
@@ -279,21 +287,32 @@ def _finish_tool(
     q: queue.Queue[Any],
 ) -> str:
     """Send function_call_output message after executing local tool."""
-    output = _run_tool(name, args_json)
+    try:
+        output = _run_tool(name, args_json)
+    except Exception as exc:  # pylint: disable=broad-except
+        log.error("Tool '%s' failed: %s", name, exc)
+        output = f"ERROR: {exc}"
 
-    follow = client.responses.create(
-        model=MODEL,
-        input=[{
-            "type":   "function_call_output",
-            "call_id": tool_call_id,
-            "output":  output,
-        }],
-        previous_response_id=response_id,
-        tools=TOOLS,
-        stream=True,
-    )
-    return _pipe(follow, q, run_id)
-
+    try:
+        follow = client.responses.create(
+            model=MODEL,
+            input=[{
+                "type":   "function_call_output",
+                "call_id": tool_call_id,
+                "output":  output,
+            }],
+            previous_response_id=response_id,
+            instructions=INSTRUCTIONS,
+            tools=TOOLS,
+            stream=True,
+        )
+        return _pipe(follow, q, run_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        log.error("Failed to send tool output: %s", exc)
+        q.put(str(exc))
+        return response_id
+    finally:
+        q.put(None)
 
 def _pipe(
     stream,
@@ -454,16 +473,23 @@ def chat_stream():
 
     @copy_current_request_context
     def work() -> None:
-        stream = client.responses.create(
-            model=MODEL,
-            input=msg,
-            previous_response_id=last_resp_id,
-            tools=TOOLS,
-            tool_choice="auto",
-            parallel_tool_calls=False,
-            stream=True,
-        )
-        _pipe(stream, q)
+        try:
+            stream = client.responses.create(
+                model=MODEL,
+                input=msg,
+                previous_response_id=last_resp_id,
+                instructions=INSTRUCTIONS,
+                tools=TOOLS,
+                tool_choice="auto",
+                parallel_tool_calls=False,
+                stream=True,
+            )
+            _pipe(stream, q)
+        except Exception as exc:  # pylint: disable=broad-except
+            log.error("OpenAI stream failed: %s", exc)
+            q.put(str(exc))
+        finally:
+            q.put(None)
 
     threading.Thread(target=work, daemon=True).start()
     return Response(
