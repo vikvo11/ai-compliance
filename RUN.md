@@ -15,4 +15,4 @@ Then open your browser and go to:
 http://localhost:5005
 ```
 
-This will serve the Flask app on port 5000 using Gunicorn.
+The container runs `python app.py`, so the Flask app listens on port 5005.

@@ -17,3 +17,16 @@ Headless RPA Filing – Playwright-driven bots log in, fill the online forms, up
 Audit-Ready Evidence – Every step (raw source, extracted JSON, portal response) is stored in encrypted S3 with immutable hashes for audit trails.
 
 Dashboard & API – Track filing status, download receipts, or trigger filings programmatically. SOC 2 controls, SSO and granular role permissions are built in.
+
+## Configuration
+
+Copy `cfg/openai.cfg.example` to `cfg/openai.cfg` and fill in your OpenAI credentials. The application reads the following environment variables:
+
+- `OPENAI_API_KEY` – your OpenAI key (or set in the config file)
+- `OPENAI_MODEL` – optional model name (defaults to `gpt-4o-mini`)
+- `FLASK_SECRET_KEY` – Flask session secret
+- `FCC_API_KEY` – FCC Public API key for ECFS lookups
+
+## License
+
+This project is released under the [MIT License](LICENSE).

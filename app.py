@@ -21,6 +21,7 @@ import pandas as pd
 import configparser
 import openai
 from openai import OpenAI
+
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context,
@@ -50,6 +51,12 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 
+# ----- ➊ NEW: propagate FCC key to environment ------------------------
+FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
+if FCC_KEY:
+    os.environ["FCC_API_KEY"] = FCC_KEY
+# ----------------------------------------------------------------------
+import fcc_ecfs
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
@@ -93,23 +100,34 @@ HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
 @functools.lru_cache(maxsize=1_024)
 def _coords_for(city: str) -> tuple[float, float] | None:
     """Return (lat, lon) for a given city or None if not found."""
-    r = httpx.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": city, "count": 1},
-        timeout=HTTP_TIMEOUT,
-    )
-    res = r.json().get("results")
+    try:
+        r = httpx.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1},
+            timeout=HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        res = r.json().get("results")
+    except httpx.HTTPError as exc:
+        log.error("Weather geocoding failed: %s", exc)
+        return None
+    
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
 async def _weather_for_async(lat: float, lon: float) -> dict:
     """Call current-weather endpoint asynchronously."""
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
-        r = await ac.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={"latitude": lat, "longitude": lon, "current_weather": True},
-        )
-    return r.json().get("current_weather", {})
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as ac:
+            r = await ac.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={"latitude": lat, "longitude": lon, "current_weather": True},
+            )
+            r.raise_for_status()
+        return r.json().get("current_weather", {})
+    except httpx.HTTPError as exc:
+        log.error("Weather fetch failed: %s", exc)
+        return {}
 
 
 def _run_sync(coro: asyncio.Future) -> Any:
@@ -149,6 +167,16 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         }
     )
 
+# ──────────── FCC wrappers (use fcc_ecfs module) ────────────
+def fcc_search_filings(company: str) -> list[dict]:
+    """Return numbered list of PDFs for company."""
+    return fcc_ecfs.search(company)
+
+
+def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
+    """Download & parse selected FCC PDFs (1-based indexes)."""
+    return fcc_ecfs.get_texts(company, indexes)
+
 # ───────────────────────── 3a. TOOL SCHEMA ───────────────────
 TOOLS = [
     {
@@ -185,11 +213,49 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "fcc_search_filings",
+        "description": "Search FCC ECFS for all PDF attachments of a company",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "company": {
+                    "type": "string",
+                    "description": "Company name to search for",
+                },
+            },
+            "required": ["company"],
+            "additionalProperties": False
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "fcc_get_filings_text",
+        "description": "Download & parse selected FCC ECFS PDFs and return text",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "company": {"type": "string"},
+                "indexes": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "1-based indexes from fcc_search_filings",
+                },
+            },
+            "required": ["company", "indexes"],
+            "additionalProperties": False
+        },
+        "strict": True,
+    },
 ]
 
 DISPATCH = {
     "get_current_weather": get_current_weather,
     "get_invoice_by_id":   get_invoice_by_id,
+    "fcc_search_filings":  fcc_search_filings,
+    "fcc_get_filings_text": fcc_get_filings_text,
 }
 
 # ─────────────────────── 4. STREAM HANDLER ───────────────────
@@ -361,7 +427,6 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
                 keep_alive = time.time() + 20
 
 # ─────────────────────── 6. CHAT ENDPOINT ────────────────────
-@app.route("/chat/stream", methods=["POST"])
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """
