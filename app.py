@@ -57,6 +57,14 @@ if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
 # ----------------------------------------------------------------------
 import fcc_ecfs
+
+# ──────────────────── instructions for Responses API ────────────
+try:
+    with open("instructions.cfg", "r", encoding="utf-8") as f:
+        INSTRUCTIONS = f.read().strip()
+except OSError as exc:
+    log.warning("Failed to load instructions.cfg: %s", exc)
+    INSTRUCTIONS = ""
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
@@ -289,6 +297,7 @@ def _finish_tool(
             "output":  output,
         }],
         previous_response_id=response_id,
+        instructions=INSTRUCTIONS,
         tools=TOOLS,
         stream=True,
     )
@@ -458,6 +467,7 @@ def chat_stream():
             model=MODEL,
             input=msg,
             previous_response_id=last_resp_id,
+            instructions=INSTRUCTIONS,
             tools=TOOLS,
             tool_choice="auto",
             parallel_tool_calls=False,
