@@ -289,7 +289,11 @@ def _finish_tool(
     """Send function_call_output message after executing local tool."""
     try:
         output = _run_tool(name, args_json)
+    except Exception as exc:  # pylint: disable=broad-except
+        log.error("Tool '%s' failed: %s", name, exc)
+        output = f"ERROR: {exc}"
 
+    try:
         follow = client.responses.create(
             model=MODEL,
             input=[{
@@ -304,7 +308,7 @@ def _finish_tool(
         )
         return _pipe(follow, q, run_id)
     except Exception as exc:  # pylint: disable=broad-except
-        log.error("Tool execution failed: %s", exc)
+        log.error("Failed to send tool output: %s", exc)
         q.put(str(exc))
         return response_id
     finally:
