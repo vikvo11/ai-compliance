@@ -200,7 +200,7 @@ TOOLS = [
                     "default": "celsius",
                 },
             },
-            "required": ["location"],          # unit is optional
+            "required": ["location", "unit"],
             "additionalProperties": False,
         },
     },
