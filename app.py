@@ -60,7 +60,7 @@ import fcc_ecfs
 
 # ──────────────────── instructions for Responses API ────────────
 try:
-    with open("instructions.cfg", "r", encoding="utf-8") as f:
+    with open("responcess_api_instructions.cfg", "r", encoding="utf-8") as f:
         INSTRUCTIONS = f.read().strip()
 except OSError as exc:
     log.warning("Failed to load instructions.cfg: %s", exc)
