@@ -1,6 +1,6 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Responses API (stream + tool-calling, strict mode) — SDK ≥ 1.78
+# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling, strict mode) — SDK ≥ 1.78
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import pandas as pd
 import configparser
 import openai
 from openai import OpenAI
-
+import fcc_ecfs
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context,
@@ -51,12 +51,11 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 
-# Propagate FCC key to environment (tool helpers need it)
+# ----- ➊ NEW: propagate FCC key to environment ------------------------
 FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
 if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
-
-import fcc_ecfs                   # after the env var is set
+# ----------------------------------------------------------------------
 
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
@@ -65,6 +64,8 @@ app.config.update(
     SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
+    # SESSION_COOKIE_HTTPONLY=True,
+    # SESSION_COOKIE_SECURE=True, 
     SESSION_COOKIE_SAMESITE="None",
 )
 db = SQLAlchemy(app)
@@ -110,6 +111,7 @@ def _coords_for(city: str) -> tuple[float, float] | None:
     except httpx.HTTPError as exc:
         log.error("Weather geocoding failed: %s", exc)
         return None
+    
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
@@ -165,26 +167,17 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         }
     )
 
-
-# ────────── FCC wrappers (use fcc_ecfs module) ──────────
+# ──────────── FCC wrappers (use fcc_ecfs module) ────────────
 def fcc_search_filings(company: str) -> list[dict]:
     """Return numbered list of PDFs for company."""
-    try:
-        return fcc_ecfs.search(company)
-    except Exception as exc:
-        log.exception("FCC search failed")
-        return {"error": str(exc)}
+    return fcc_ecfs.search(company)
 
 
 def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
     """Download & parse selected FCC PDFs (1-based indexes)."""
-    try:
-        return fcc_ecfs.get_texts(company, indexes)
-    except Exception as exc:
-        log.exception("FCC get_texts failed")
-        return {"error": str(exc)}
+    return fcc_ecfs.get_texts(company, indexes)
 
-# ───────────────────── 3a. TOOL SCHEMA ──────────────────────
+# ───────────────────────── 3a. TOOL SCHEMA ───────────────────
 TOOLS = [
     {
         "type": "function",
@@ -194,14 +187,11 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "location": {
-                    "type": "string",
-                    "description": "City name, e.g. 'Berlin'"
-                },
+                "location": {"type": "string", "description": "City name"},
                 "unit": {
                     "type": ["string", "null"],
                     "enum": ["celsius", "fahrenheit", None],
-                    "description": "Temperature unit; omit or null = celsius",
+                    "description": "Temperature unit (default celsius).",
                     "default": "celsius",
                 },
             },
@@ -217,10 +207,7 @@ TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "invoice_id": {
-                    "type": "string",
-                    "description": "Invoice identifier, e.g. 'INV-2024-042'"
-                },
+                "invoice_id": {"type": "string", "description": "Invoice identifier"},
             },
             "required": ["invoice_id"],
             "additionalProperties": False,
@@ -229,41 +216,38 @@ TOOLS = [
     {
         "type": "function",
         "name": "fcc_search_filings",
-        "description": "Search FCC ECFS for all PDF attachments of a company.",
-        "strict": True,
+        "description": "Search FCC ECFS for all PDF attachments of a company",
         "parameters": {
             "type": "object",
             "properties": {
                 "company": {
                     "type": "string",
-                    "description": "Company name, e.g. 'Verizon'"
+                    "description": "Company name to search for",
                 },
             },
             "required": ["company"],
             "additionalProperties": False
         },
+        "strict": True,
     },
     {
         "type": "function",
         "name": "fcc_get_filings_text",
-        "description": "Download & parse selected FCC ECFS PDFs and return text.",
-        "strict": True,
+        "description": "Download & parse selected FCC ECFS PDFs and return text",
         "parameters": {
             "type": "object",
             "properties": {
-                "company": {
-                    "type": "string",
-                    "description": "Same string used in fcc_search_filings"
-                },
+                "company": {"type": "string"},
                 "indexes": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "1-based indexes from the previous search result"
+                    "description": "1-based indexes from fcc_search_filings",
                 },
             },
             "required": ["company", "indexes"],
             "additionalProperties": False
         },
+        "strict": True,
     },
 ]
 
@@ -276,25 +260,13 @@ DISPATCH = {
 
 # ─────────────────────── 4. STREAM HANDLER ───────────────────
 def _run_tool(name: str, args: str) -> str:
-    """
-    Invoke a tool *safely* and always return a string
-    (JSON-encoded if the tool returns a dict).
-    """
+    """Invoke a tool and always return a string (JSON if dict)."""
     try:
         params = json.loads(args or "{}")
     except json.JSONDecodeError:
         return f"Bad JSON: {args}"
-
     fn = DISPATCH.get(name)
-    if not fn:
-        return f"Unknown tool {name}"
-
-    try:
-        res = fn(**params)
-    except Exception as exc:
-        log.exception("Tool %s raised error", name)
-        res = {"error": str(exc)}
-
+    res = fn(**params) if fn else f"Unknown tool {name}"
     return json.dumps(res) if isinstance(res, dict) else str(res)
 
 
@@ -306,8 +278,8 @@ def _finish_tool(
     args_json: str,
     q: queue.Queue[Any],
 ) -> str:
-    """Execute local tool and stream its output back to the model."""
-    output = _run_tool(name, args_json or "{}")
+    """Send function_call_output message after executing local tool."""
+    output = _run_tool(name, args_json)
 
     follow = client.responses.create(
         model=MODEL,
@@ -330,65 +302,66 @@ def _pipe(
 ) -> str:
     """
     Parse streaming events, forward assistant text to queue (as SSE `data:`),
-    execute tool-calls, and emit:
-      • `meta` (new prev_id) early
-      • `resp_id` when the turn fully succeeds
+    execute tool-calls, and, ОNE TIME, push a special *meta* event that carries
+    the freshly issued `previous_response_id`.  Cookie-free clients can store
+    that ID (e.g. localStorage) and send it in the next /chat/stream request.
     """
     response_id  = ""
-    meta_sent    = False
-    early_text: list[str] = []
-    buf: dict[str, dict[str, Any]] = {}
+    meta_sent    = False                # guard for single meta push
+    early_text: list[str] = []          # buffer tokens until meta is sent
+    buf: dict[str, dict[str, Any]] = {} # temp storage for tool-call args
 
     for ev in stream:
         typ   = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
         delta = getattr(ev, "delta", None)
         run_id = getattr(ev, "run_id", run_id)
 
-        # ───────── first fragment with whole Response ─────────
+        # ───────────────── first fragment with whole Response ─────────────
         if getattr(ev, "response", None):
             response_id = ev.response.id
+
+            # send meta only once and before any user-visible text
             if not meta_sent:
                 q.put({"meta": {"prev_id": response_id}})
-                for t in early_text:
+                for t in early_text:         # flush buffered tokens
                     q.put(t)
                 early_text.clear()
                 meta_sent = True
 
-        # ───────── plain text tokens ─────────
+        # ───────────────── plain-text token (assistant stream) ────────────
         if isinstance(delta, str) and "arguments" not in typ:
             (q.put if meta_sent else early_text.append)(delta)
 
-        # ───────── legacy tool_calls ─────────
+        # ───────────────── legacy tool_calls array ────────────────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 fn_name   = tc.function.name if getattr(tc, "function", None) else tc.name
                 full_args = tc.function.arguments if getattr(tc, "function", None) else tc.arguments
                 call_id   = getattr(tc, "call_id", None) or tc.id
                 buf[tc.id] = {"name": fn_name, "parts": [], "call_id": call_id}
-                response_id = _finish_tool(
-                    response_id, run_id,
-                    call_id, fn_name, full_args or "{}", q
-                )
+                if full_args:
+                    response_id = _finish_tool(
+                        response_id, run_id,
+                        call_id, fn_name, full_args, q
+                    )
 
-        # ───────── new output_item schema ─────────
+        # ───────────────── new output_item schema ─────────────────────────
         if typ == "response.output_item.added":
             item = (
                 getattr(ev, "item", None)
                 or getattr(ev, "output_item", None)
                 or ev.model_dump(exclude_none=True).get("item")
             )
-            if item:
-                if not isinstance(item, dict):
-                    item = item.model_dump(exclude_none=True)
-                if item.get("type") in ("function_call", "tool_call"):
-                    iid   = item["id"]
-                    fname = item.get("function", {}).get("name") \
-                            or item.get("tool_call", {}).get("name") \
-                            or item.get("name")
-                    call_id = item.get("call_id") or iid
-                    buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
+            item = item if isinstance(item, dict) else item.model_dump(exclude_none=True)
+            if item and item.get("type") in ("function_call", "tool_call"):
+                iid   = item["id"]
+                fname = item.get("function", {}).get("name") \
+                        or item.get("tool_call", {}).get("name") \
+                        or item.get("name")
+                call_id = item.get("call_id") or iid
+                buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
-        # ───────── accumulate arg chunks ─────────
+        # ───────────────── accumulate argument chunks ─────────────────────
         if "arguments.delta" in typ:
             iid = (
                 getattr(ev, "output_item_id", None)
@@ -398,7 +371,7 @@ def _pipe(
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
-        # ───────── end-of-args → run tool ─────────
+        # ───────────────── end-of-args → run tool ─────────────────────────
         if typ.endswith("arguments.done"):
             iid = (
                 getattr(ev, "output_item_id", None)
@@ -412,22 +385,21 @@ def _pipe(
 
                 response_id = _finish_tool(
                     response_id, run_id,
-                    call_id, fn_name, full_json or "{}", q
+                    call_id, fn_name, full_json, q
                 )
                 buf.pop(iid, None)
 
-        # ───────── turn completed ─────────
+        # ───────────────── turn completed ─────────────────────────────────
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            q.put({"resp_id": response_id})
-            q.put(None)
+            q.put(None)             # sentinel for SSE generator
             return response_id
 
     q.put(None)
     return response_id
 
-# ─────────────────── 5. SSE GENERATOR ────────────────────
+# ─────────────────── 5. SSE GENERATOR ────────────────────────
 def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
-    """Convert queue events to SSE and keep session.prev_response_id updated."""
+    """Convert queue events to SSE, record prev_response_id before streaming."""
     keep_alive = time.time() + 20
     while True:
         try:
@@ -454,14 +426,21 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
                 yield b": ping\n\n"
                 keep_alive = time.time() + 20
 
-# ─────────────────────── 6. CHAT ENDPOINT ───────────────────
+# ─────────────────────── 6. CHAT ENDPOINT ────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """
     POST JSON  {
-      "message":              "<user text>",
-      "previous_response_id": "<id from last meta event, optional>"
+        "message":               "<user text>",
+        "previous_response_id":  "<id from last meta event, optional>"
     }
+    ──────────────────────────────────────────────────────────────
+    Returns an SSE stream with:
+      • assistant tokens         →  event: <default>   data: …
+      • meta containing new ID   →  event: meta        data: {"prev_id": "..."}
+      • completion sentinel      →  event: done        data: [DONE]
+    The browser should save the prev_id from the *meta* event (e.g. localStorage)
+    and include it in the next POST.  Куки больше не требуются.
     """
     data = request.get_json(force=True, silent=True) or {}
     msg  = (data.get("message") or "").strip()
@@ -496,7 +475,7 @@ def chat_stream():
         },
     )
 
-# ─────────────────── 7. CSV IMPORT / CRUD ROUTES ────────────
+# ─────────────────── 7. CSV IMPORT / CRUD ROUTES ─────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -529,10 +508,8 @@ def index():
         db.session.add_all(new_clients.values())
         db.session.add_all(invoices)
         db.session.commit()
-        log.info(
-            "CSV: %d invoices, %d new clients (%.3fs)",
-            len(invoices), len(new_clients), time.perf_counter() - t0
-        )
+        log.info("CSV: %d invoices, %d new clients (%.3fs)",
+                 len(invoices), len(new_clients), time.perf_counter() - t0)
         flash("Invoices uploaded successfully.")
         return redirect("/")
 
@@ -585,10 +562,10 @@ def export_invoice(invoice_id: int | None = None):
         csv_data,
         200,
         {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename=\"{fname}\"'},
+         "Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
-# ───────────────────────── 8. RUN APP ───────────────────────
+# ───────────────────────── 8. RUN APP ────────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
     if tuple(map(int, openai.__version__.split(".")[:2])) < (1, 7):
