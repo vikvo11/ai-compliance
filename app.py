@@ -21,7 +21,7 @@ import pandas as pd
 import configparser
 import openai
 from openai import OpenAI
-
+import fcc_ecfs
 from flask import (
     Flask, render_template, request, redirect, flash,
     jsonify, session, Response, copy_current_request_context,
@@ -56,7 +56,7 @@ FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
 if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
 # ----------------------------------------------------------------------
-import fcc_ecfs
+
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
