@@ -287,22 +287,28 @@ def _finish_tool(
     q: queue.Queue[Any],
 ) -> str:
     """Send function_call_output message after executing local tool."""
-    output = _run_tool(name, args_json)
+    try:
+        output = _run_tool(name, args_json)
 
-    follow = client.responses.create(
-        model=MODEL,
-        input=[{
-            "type":   "function_call_output",
-            "call_id": tool_call_id,
-            "output":  output,
-        }],
-        previous_response_id=response_id,
-        instructions=INSTRUCTIONS,
-        tools=TOOLS,
-        stream=True,
-    )
-    return _pipe(follow, q, run_id)
-
+        follow = client.responses.create(
+            model=MODEL,
+            input=[{
+                "type":   "function_call_output",
+                "call_id": tool_call_id,
+                "output":  output,
+            }],
+            previous_response_id=response_id,
+            instructions=INSTRUCTIONS,
+            tools=TOOLS,
+            stream=True,
+        )
+        return _pipe(follow, q, run_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        log.error("Tool execution failed: %s", exc)
+        q.put(str(exc))
+        return response_id
+    finally:
+        q.put(None)
 
 def _pipe(
     stream,
@@ -463,17 +469,23 @@ def chat_stream():
 
     @copy_current_request_context
     def work() -> None:
-        stream = client.responses.create(
-            model=MODEL,
-            input=msg,
-            previous_response_id=last_resp_id,
-            instructions=INSTRUCTIONS,
-            tools=TOOLS,
-            tool_choice="auto",
-            parallel_tool_calls=False,
-            stream=True,
-        )
-        _pipe(stream, q)
+        try:
+            stream = client.responses.create(
+                model=MODEL,
+                input=msg,
+                previous_response_id=last_resp_id,
+                instructions=INSTRUCTIONS,
+                tools=TOOLS,
+                tool_choice="auto",
+                parallel_tool_calls=False,
+                stream=True,
+            )
+            _pipe(stream, q)
+        except Exception as exc:  # pylint: disable=broad-except
+            log.error("OpenAI stream failed: %s", exc)
+            q.put(str(exc))
+        finally:
+            q.put(None)
 
     threading.Thread(target=work, daemon=True).start()
     return Response(
