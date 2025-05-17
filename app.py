@@ -182,7 +182,7 @@ def fcc_search_filings(company: str) -> list[dict]:
 
 
 def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
-    """Download & parse selected FCC PDFs (1-based indexes)."""
+    """Download and parse the selected FCC PDFs without saving them."""
     return fcc_ecfs.get_texts(company, indexes)
 
 # ───────────────────────── 3a. TOOL SCHEMA ───────────────────

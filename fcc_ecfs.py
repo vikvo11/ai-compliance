@@ -100,50 +100,27 @@ def _pdf_to_text(buf: io.BytesIO) -> str:
 
 
 def get_texts(company: str, choices: List[int]) -> Dict[str, str]:
-    """
-    Download and convert the selected PDFs to text.
+    """Download the selected FCC ECFS PDFs and return their text.
 
     Parameters
     ----------
     company : str
-    choices : list[int] – list of 1-based indexes as returned by search()
+    choices : list[int]
+        1-based indexes as returned by :func:`search`.
 
     Returns
     -------
-    dict: mapping "<idx>. <original filename>" → "<plain text>"
+    dict
+        Mapping ``"<idx>. <original filename>"`` to the extracted plain text.
     """
     catalog = search(company)
     sel = [item for item in catalog if item["idx"] in choices]
     if not sel:
         raise ValueError("No matching indexes.")
 
-    # create output dir once
-    dst = ROOT_DIR / _sanitize(company)
-    dst.mkdir(parents=True, exist_ok=True)
-
-    dup = Counter()
     out: Dict[str, str] = {}
-
     for item in sel:
-        basename = Path(_sanitize(item["filename"])).stem
-        tag = f"{item['date']}_{item['idx']:03d}_{basename}"
-        dup[tag] += 1
-        unique = tag if dup[tag] == 1 else f"{dup[tag]}_{tag}"
-        txt_path = dst / f"{unique}.txt"
-
         text = _pdf_to_text(_download_pdf(item["url"]))
-        txt_path.write_text(text, encoding="utf-8")
         out[f"{item['idx']}. {item['filename']}"] = text
-
-    # save/update index file
-    idx_file = dst / "pdf_index.tsv"
-    mode = "a" if idx_file.exists() else "w"
-    with idx_file.open(mode, encoding="utf-8") as fh:
-        if mode == "w":
-            fh.write("timestamp\tcompany\tfilename\turl\n")
-        ts = datetime.utcnow().isoformat(timespec="seconds")
-        for item in sel:
-            fh.write(f"{ts}\t{company}\t{item['filename']}\t{item['url']}\n")
-
     return out
 
