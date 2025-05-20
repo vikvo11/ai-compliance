@@ -17,3 +17,7 @@ Headless RPA Filing – Playwright-driven bots log in, fill the online forms, up
 Audit-Ready Evidence – Every step (raw source, extracted JSON, portal response) is stored in encrypted S3 with immutable hashes for audit trails.
 
 Dashboard & API – Track filing status, download receipts, or trigger filings programmatically. SOC 2 controls, SSO and granular role permissions are built in.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
