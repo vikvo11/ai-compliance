@@ -16,6 +16,8 @@ import logging
 from collections.abc import Generator
 from typing import Any
 
+from cors import register_cors
+
 import httpx
 import pandas as pd
 import configparser
@@ -79,6 +81,7 @@ app.config.update(
 db = SQLAlchemy(app)
 os.makedirs("/app/data", exist_ok=True)
 
+register_cors(app)
 
 class Client(db.Model):
     id    = db.Column(db.Integer, primary_key=True)
