@@ -1,0 +1,7 @@
+[DEFAULT]
+ALLOWED_ORIGINS = {
+    "http://127.0.0.1:5000": "MY_PARTNER_KEY",
+    "http://127.0.0.1:5500":   "LOCAL-DEV",
+    "http://127.0.0.1:5005": "MY_PARTNER_KEY123",
+    "https://vorovik.pythonanywhere.com": "MY_PARTNER_KEY"
+    }          
