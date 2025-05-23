@@ -125,7 +125,7 @@
 /* Messages */
 .aiw-box .message{
   max-width:90%; padding:.75rem; border-radius:10px;
-  line-height:1.45; font-size:14px; white-space:pre-wrap; word-break:break-word;
+  line-height:1.45; font-size:14px;
 }
 .aiw-box .message.user{
   background:var(--aiw-user-bg); color:var(--aiw-user-text); margin-left:auto;
