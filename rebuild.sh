@@ -4,8 +4,8 @@
 echo "Ensuring local ./data directory exists with write permissions..."
 mkdir -p ./data
 chmod 777 ./data
-echo "Pulling latest changes from Git..."
-git pull
+#echo "Pulling latest changes from Git..."
+#git pull
 
 # Step 2: Build Docker image
 echo "Building Docker image..."
