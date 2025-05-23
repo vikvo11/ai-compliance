@@ -30,3 +30,9 @@ Copy `cfg/openai.cfg.example` to `cfg/openai.cfg` and fill in your OpenAI creden
 ## License
 
 This project is released under the [MIT License](LICENSE).
+
+## CORS
+export ALLOWED_ORIGINS='{
+    "https://partner-site.io":  "PARTNER-TOKEN-42",
+    "https://demo.example":     "DEMO-TOKEN-XYZ"
+}'
