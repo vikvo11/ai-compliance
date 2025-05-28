@@ -1,12 +1,13 @@
 # app.py
 # -*- coding: utf-8 -*-
-# Flask + SQLAlchemy + OpenAI Responses API (stream + tool calling, strict mode) — SDK ≥ 1.78
+# Flask + SQLAlchemy + OpenAI Responses API (stream + tool-calling, strict mode) — SDK ≥ 1.78
 
 from __future__ import annotations
 
 import os
 import sys
 import time
+# import subprocess
 import json
 import queue
 import threading
@@ -52,21 +53,27 @@ if not OPENAI_API_KEY:
     sys.exit(1)
 
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
-
-# ----- ➊ NEW: propagate FCC key to environment ------------------------
+###
+MCP_SERVER_URL = cfg.get(
+    "DEFAULT",                         # в cfg/openai.cfg
+    "MCP_SERVER_URL",                  # MCP_SERVER_URL = http://localhost:5006
+    fallback=os.getenv("MCP_SERVER_URL", " http://127.0.0.1:8000/mcp "),
+)
+# ----- ➊ propagate FCC key to environment ---------------------
 FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
 if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
-# ----------------------------------------------------------------------
-import fcc_ecfs
+# --------------------------------------------------------------
+import fcc_ecfs      # noqa: E402  (depends on env var)
 
-# ──────────────────── instructions for Responses API ────────────
+# ──────────────────── instructions for Responses API ─────────
 try:
     with open("responcess_api_instructions.cfg", "r", encoding="utf-8") as f:
         INSTRUCTIONS = f.read().strip()
 except OSError as exc:
     log.warning("Failed to load instructions.cfg: %s", exc)
     INSTRUCTIONS = ""
+
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "replace-this-secret")
@@ -75,34 +82,34 @@ app.config.update(
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
     # SESSION_COOKIE_HTTPONLY=True,
-    # SESSION_COOKIE_SECURE=True, 
+    # SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_SAMESITE="None",
 )
-db = SQLAlchemy(app)
-os.makedirs("/app/data", exist_ok=True)
+# db = SQLAlchemy(app)
+# os.makedirs("/app/data", exist_ok=True)
 
 register_cors(app)
 
-class Client(db.Model):
-    id    = db.Column(db.Integer, primary_key=True)
-    name  = db.Column(db.String(128), unique=True, nullable=False)
-    email = db.Column(db.String(128))
-    invoices = db.relationship(
-        "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
-    )
+# class Client(db.Model):
+#     id    = db.Column(db.Integer, primary_key=True)
+#     name  = db.Column(db.String(128), unique=True, nullable=False)
+#     email = db.Column(db.String(128))
+#     invoices = db.relationship(
+#         "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
+#     )
 
 
-class Invoice(db.Model):
-    id         = db.Column(db.Integer, primary_key=True)
-    invoice_id = db.Column(db.String(64), nullable=False)
-    amount     = db.Column(db.Float,      nullable=False)
-    date_due   = db.Column(db.String(64), nullable=False)
-    status     = db.Column(db.String(32), nullable=False)
-    client_id  = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
+# class Invoice(db.Model):
+#     id         = db.Column(db.Integer, primary_key=True)
+#     invoice_id = db.Column(db.String(64), nullable=False)
+#     amount     = db.Column(db.Float,      nullable=False)
+#     date_due   = db.Column(db.String(64), nullable=False)
+#     status     = db.Column(db.String(32), nullable=False)
+#     client_id  = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
 
 
-with app.app_context():
-    db.create_all()
+# with app.app_context():
+#     db.create_all()
 
 # ─────────────────────── 3. LOCAL TOOL FUNCTIONS ─────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
@@ -122,7 +129,7 @@ def _coords_for(city: str) -> tuple[float, float] | None:
     except httpx.HTTPError as exc:
         log.error("Weather geocoding failed: %s", exc)
         return None
-    
+
     return None if not res else (res[0]["latitude"], res[0]["longitude"])
 
 
@@ -178,7 +185,7 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         }
     )
 
-# ──────────── FCC wrappers (use fcc_ecfs module) ────────────
+# ───────────── FCC wrappers (use fcc_ecfs module) ────────────
 def fcc_search_filings(company: str) -> list[dict]:
     """Return numbered list of PDFs for company."""
     return fcc_ecfs.search(company)
@@ -202,7 +209,7 @@ TOOLS = [
                 "unit": {
                     "type": ["string", "null"],
                     "enum": ["celsius", "fahrenheit", None],
-                    "description": "Temperature unit (default celsius).",
+                    "description": "Temperature unit (default: celsius).",
                     "default": "celsius",
                 },
             },
@@ -224,50 +231,75 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
-    {
-        "type": "function",
-        "name": "fcc_search_filings",
-        "description": "Search FCC ECFS for all PDF attachments of a company",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "company": {
-                    "type": "string",
-                    "description": "Company name to search for",
-                },
-            },
-            "required": ["company"],
-            "additionalProperties": False
-        },
-        "strict": True,
-    },
-    {
-        "type": "function",
-        "name": "fcc_get_filings_text",
-        "description": "Download & parse selected FCC ECFS PDFs and return text",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "company": {"type": "string"},
-                "indexes": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "1-based indexes from fcc_search_filings",
-                },
-            },
-            "required": ["company", "indexes"],
-            "additionalProperties": False
-        },
-        "strict": True,
-    },
+    # {
+    #     "type": "mcp",                # Remote MCP server
+    #     "server_label": "company_info",
+    #     "server_url": MCP_SERVER_URL,
+    #     "require_approval": "never", 
+    #     "allowed_tools": ["test_company_info"],
+    #     "cache_for_seconds": 50, 
+    # },
+    # {
+    #     "type": "mcp",
+    #     "server_label": "deepwiki",
+    #     "server_url": "https://vorovik.pythonanywhere.com/",
+    #     "require_approval": "never",
+    #     "allowed_tools": ["ask_question"],
+    # }
+    # FCC tools left commented out for brevity
+    # {
+    #     "type": "function",
+    #     "name": "fcc_search_filings",
+    #     "description": "Search FCC ECFS for all PDF attachments of a company",
+    #     "parameters": {
+    #         "type": "object",
+    #         "properties": {
+    #             "company": {
+    #                 "type": "string",
+    #                 "description": "Company name to search for",
+    #             },
+    #         },
+    #         "required": ["company"],
+    #         "additionalProperties": False
+    #     },
+    #     "strict": True,
+    # },
+    # {
+    #     "type": "function",
+    #     "name": "fcc_get_filings_text",
+    #     "description": "Download & parse selected FCC ECFS PDFs and return text",
+    #     "parameters": {
+    #         "type": "object",
+    #         "properties": {
+    #             "company": {"type": "string"},
+    #             "indexes": {
+    #                 "type": "array",
+    #                 "items": {"type": "integer"},
+    #                 "description": "1-based indexes from fcc_search_filings",
+    #             },
+    #         },
+    #         "required": ["company", "indexes"],
+    #         "additionalProperties": False
+    #     },
+    #     "strict": True,
+    # },
 ]
+
+# MCP_URL_BY_LABEL = {
+#     t["server_label"]: t["server_url"]
+#     for t in TOOLS if t.get("type") == "mcp"
+# }
 
 DISPATCH = {
     "get_current_weather": get_current_weather,
     "get_invoice_by_id":   get_invoice_by_id,
-    "fcc_search_filings":  fcc_search_filings,
-    "fcc_get_filings_text": fcc_get_filings_text,
+    # "fcc_search_filings":  fcc_search_filings,
+    # "fcc_get_filings_text": fcc_get_filings_text,
 }
+
+@app.before_request
+def _log():
+    print("MCP <--", request.method, request.path)
 
 # ─────────────────────── 4. STREAM HANDLER ───────────────────
 def _run_tool(name: str, args: str) -> str:
@@ -324,37 +356,34 @@ def _pipe(
 ) -> str:
     """
     Parse streaming events, forward assistant text to queue (as SSE `data:`),
-    execute tool-calls, and, ОNE TIME, push a special *meta* event that carries
-    the freshly issued `previous_response_id`.  Cookie-free clients can store
-    that ID (e.g. localStorage) and send it in the next /chat/stream request.
+    execute tool-calls, and, once, push a *meta* event that carries the
+    freshly issued `previous_response_id`.
     """
     response_id  = ""
-    meta_sent    = False                # guard for single meta push
-    early_text: list[str] = []          # buffer tokens until meta is sent
-    buf: dict[str, dict[str, Any]] = {} # temp storage for tool-call args
+    meta_sent    = False                 # guard for single meta push
+    early_text: list[str] = []           # buffer tokens until meta is sent
+    buf: dict[str, dict[str, Any]] = {}  # temp storage for tool-call args
 
     for ev in stream:
         typ   = getattr(ev, "event", None) or getattr(ev, "type", "") or ""
         delta = getattr(ev, "delta", None)
         run_id = getattr(ev, "run_id", run_id)
 
-        # ───────────────── first fragment with whole Response ─────────────
+        # ───────── first fragment with whole Response ──────────────
         if getattr(ev, "response", None):
             response_id = ev.response.id
-
-            # send meta only once and before any user-visible text
             if not meta_sent:
                 q.put({"meta": {"prev_id": response_id}})
-                for t in early_text:         # flush buffered tokens
+                for t in early_text:          # flush buffered tokens
                     q.put(t)
                 early_text.clear()
                 meta_sent = True
 
-        # ───────────────── plain-text token (assistant stream) ────────────
+        # ───────── plain-text token (assistant stream) ─────────────
         if isinstance(delta, str) and "arguments" not in typ:
             (q.put if meta_sent else early_text.append)(delta)
 
-        # ───────────────── legacy tool_calls array ────────────────────────
+        # ───────── legacy tool_calls array ─────────────────────────
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 fn_name   = tc.function.name if getattr(tc, "function", None) else tc.name
@@ -367,7 +396,7 @@ def _pipe(
                         call_id, fn_name, full_args, q
                     )
 
-        # ───────────────── new output_item schema ─────────────────────────
+        # ───────── new output_item schema ──────────────────────────
         if typ == "response.output_item.added":
             item = (
                 getattr(ev, "item", None)
@@ -377,13 +406,11 @@ def _pipe(
             item = item if isinstance(item, dict) else item.model_dump(exclude_none=True)
             if item and item.get("type") in ("function_call", "tool_call"):
                 iid   = item["id"]
-                fname = item.get("function", {}).get("name") \
-                        or item.get("tool_call", {}).get("name") \
-                        or item.get("name")
+                fname = (item.get("function", {}) or item.get("tool_call", {})).get("name") or item.get("name")
                 call_id = item.get("call_id") or iid
                 buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
-        # ───────────────── accumulate argument chunks ─────────────────────
+        # ───────── accumulate argument chunks ──────────────────────
         if "arguments.delta" in typ:
             iid = (
                 getattr(ev, "output_item_id", None)
@@ -393,7 +420,7 @@ def _pipe(
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
-        # ───────────────── end-of-args → run tool ─────────────────────────
+        # ───────── end-of-args → run tool ─────────────────────────
         if typ.endswith("arguments.done"):
             iid = (
                 getattr(ev, "output_item_id", None)
@@ -402,18 +429,15 @@ def _pipe(
             )
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
-                fn_name   = buf[iid]["name"]
-                call_id   = buf[iid]["call_id"]
-
                 response_id = _finish_tool(
                     response_id, run_id,
-                    call_id, fn_name, full_json, q
+                    buf[iid]["call_id"], buf[iid]["name"], full_json, q
                 )
                 buf.pop(iid, None)
 
-        # ───────────────── turn completed ─────────────────────────────────
+        # ───────── turn completed ─────────────────────────────────
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            q.put(None)             # sentinel for SSE generator
+            q.put(None)            # sentinel for SSE generator
             return response_id
 
     q.put(None)
@@ -421,7 +445,7 @@ def _pipe(
 
 # ─────────────────── 5. SSE GENERATOR ────────────────────────
 def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
-    """Convert queue events to SSE, record prev_response_id before streaming."""
+    """Convert queue events to SSE, recording prev_response_id before streaming."""
     keep_alive = time.time() + 20
     while True:
         try:
@@ -456,13 +480,10 @@ def chat_stream():
         "message":               "<user text>",
         "previous_response_id":  "<id from last meta event, optional>"
     }
-    ──────────────────────────────────────────────────────────────
     Returns an SSE stream with:
-      • assistant tokens         →  event: <default>   data: …
-      • meta containing new ID   →  event: meta        data: {"prev_id": "..."}
-      • completion sentinel      →  event: done        data: [DONE]
-    The browser should save the prev_id from the *meta* event (e.g. localStorage)
-    and include it in the next POST.  Куки больше не требуются.
+      • assistant tokens         → default event
+      • meta event               → {"prev_id": "..."} once per turn
+      • done sentinel            → event: done / data: [DONE]
     """
     data = request.get_json(force=True, silent=True) or {}
     msg  = (data.get("message") or "").strip()
@@ -489,7 +510,15 @@ def chat_stream():
             )
             _pipe(stream, q)
         except Exception as exc:  # pylint: disable=broad-except
-            log.error("OpenAI stream failed: %s", exc)
+            if "Error retrieving tool list from MCP server" in str(exc):
+                label = str(exc).split("'")[1]          # 'company_info'
+                # log.error(
+                #     "MCP list failed for %s → %s : %s",
+                #     label, MCP_URL_BY_LABEL.get(label, "<?>"), exc
+                #     )
+            else:
+                log.error("OpenAI stream failed: %s", exc)
+                #log.error("OpenAI stream failed: %s", exc)
             q.put(str(exc))
         finally:
             q.put(None)
@@ -537,12 +566,15 @@ def index():
         db.session.add_all(new_clients.values())
         db.session.add_all(invoices)
         db.session.commit()
-        log.info("CSV: %d invoices, %d new clients (%.3fs)",
-                 len(invoices), len(new_clients), time.perf_counter() - t0)
+        log.info(
+            "CSV: %d invoices, %d new clients (%.3fs)",
+            len(invoices), len(new_clients), time.perf_counter() - t0,
+        )
         flash("Invoices uploaded successfully.")
         return redirect("/")
 
-    return render_template("index.html", invoices=Invoice.query.all())
+    # return render_template("index.html", invoices=Invoice.query.all())
+    return render_template("index.html", invoices='')
 
 
 @app.route("/edit/<int:invoice_id>", methods=["POST"])
@@ -554,11 +586,13 @@ def edit_invoice(invoice_id: int):
     inv.client.email = request.form["client_email"]
     db.session.commit()
     return jsonify(
-        {"client_name": inv.client.name,
-         "invoice_id":  inv.invoice_id,
-         "amount":      inv.amount,
-         "date_due":    inv.date_due,
-         "status":      inv.status}
+        {
+            "client_name": inv.client.name,
+            "invoice_id":  inv.invoice_id,
+            "amount":      inv.amount,
+            "date_due":    inv.date_due,
+            "status":      inv.status,
+        }
     )
 
 
@@ -590,13 +624,39 @@ def export_invoice(invoice_id: int | None = None):
     return (
         csv_data,
         200,
-        {"Content-Type": "text/csv",
-         "Content-Disposition": f'attachment; filename="{fname}"'},
+        {
+            "Content-Type":        "text/csv",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+        },
     )
 
 # ───────────────────────── 8. RUN APP ────────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
-    if tuple(map(int, openai.__version__.split(".")[:2])) < (1, 7):
-        sys.exit("openai-python ≥ 1.7.0 required for function calling.")
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
+
+# if __name__ == "__main__":
+#     # demo, we'll run it locally at http://localhost:8000/mcp
+#     process: subprocess.Popen[Any] | None = None
+#     try:
+#         this_dir = os.path.dirname(os.path.abspath(__file__))
+#         server_file = os.path.join(this_dir, "mcp_server.py")
+
+#         print("Starting Streamable HTTP server at http://localhost:8000/mcp ...")
+
+#         # Run `uv run server.py` to start the Streamable HTTP server
+#         process = subprocess.Popen(["python", server_file])
+#         # Give it 3 seconds to start
+#         time.sleep(3)
+
+#         print("Streamable HTTP server started. Running example...\n\n")
+#     except Exception as e:
+#         print(f"Error starting Streamable HTTP server: {e}")
+#         exit(1)
+
+#     try:
+#         # asyncio.run(main())
+#         asyncio.run (app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False))
+#     finally:
+#         if process:
+#             process.terminate()

@@ -36,3 +36,5 @@ export ALLOWED_ORIGINS='{
     "https://partner-site.io":  "PARTNER-TOKEN-42",
     "https://demo.example":     "DEMO-TOKEN-XYZ"
 }'
+
+ uv run python app.py

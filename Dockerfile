@@ -26,6 +26,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install curl (used for HTTP requests or health checks)
+RUN apt-get update && apt-get install -y curl \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Copy the pre-built wheels from stage 1
 COPY --from=build /wheels /tmp/wheels
 
