@@ -1,13 +1,13 @@
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Responses API (stream + tool-calling, strict mode) — SDK ≥ 1.78
+# Added: OpenAI Agents (MCP) integration
 
 from __future__ import annotations
 
 import os
 import sys
 import time
-# import subprocess
 import json
 import queue
 import threading
@@ -16,6 +16,18 @@ import functools
 import logging
 from collections.abc import Generator
 from typing import Any
+
+# ────────────────── AGENTS: additional imports ───────────────
+try:
+    from agents import Agent, Runner
+    from agents.mcp import MCPServerStreamableHttp
+    from agents.model_settings import ModelSettings
+except ImportError:
+    raise RuntimeError(
+        "openai-agents not installed. Install it with:\n"
+        "   pip install openai-agents>=0.3.0"
+    )
+# ─────────────────────────────────────────────────────────────
 
 from cors import register_cors
 
@@ -53,17 +65,24 @@ if not OPENAI_API_KEY:
     sys.exit(1)
 
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
-###
+
+# ──────────── AGENTS: configuration variables ───────────────
+AGENT_MODEL       = cfg.get("DEFAULT", "agent_model",       fallback=os.getenv("OPENAI_AGENT_MODEL", MODEL))
+AGENT_MAX_TURNS   = int(cfg.get("DEFAULT", "agent_max_turns", fallback=os.getenv("AGENT_MAX_TURNS", "6")))
+os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
+# ─────────────────────────────────────────────────────────────
+
 MCP_SERVER_URL = cfg.get(
-    "DEFAULT",                         # в cfg/openai.cfg
+    "DEFAULT",                         # defined in cfg/openai.cfg
     "MCP_SERVER_URL",                  # MCP_SERVER_URL = http://localhost:5006
-    fallback=os.getenv("MCP_SERVER_URL", " http://127.0.0.1:8000/mcp "),
+    fallback=os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp"),
 )
-# ----- ➊ propagate FCC key to environment ---------------------
+
+# ----- propagate FCC key to environment ----------------------
 FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
 if FCC_KEY:
     os.environ["FCC_API_KEY"] = FCC_KEY
-# --------------------------------------------------------------
+# -------------------------------------------------------------
 import fcc_ecfs      # noqa: E402  (depends on env var)
 
 # ──────────────────── instructions for Responses API ─────────
@@ -81,8 +100,6 @@ app.config.update(
     SQLALCHEMY_DATABASE_URI="sqlite:////app/data/data.db",
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
-    # SESSION_COOKIE_HTTPONLY=True,
-    # SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_SAMESITE="None",
 )
 # db = SQLAlchemy(app)
@@ -90,30 +107,11 @@ app.config.update(
 
 register_cors(app)
 
-# class Client(db.Model):
-#     id    = db.Column(db.Integer, primary_key=True)
-#     name  = db.Column(db.String(128), unique=True, nullable=False)
-#     email = db.Column(db.String(128))
-#     invoices = db.relationship(
-#         "Invoice", backref="client", lazy=True, cascade="all, delete-orphan"
-#     )
-
-
-# class Invoice(db.Model):
-#     id         = db.Column(db.Integer, primary_key=True)
-#     invoice_id = db.Column(db.String(64), nullable=False)
-#     amount     = db.Column(db.Float,      nullable=False)
-#     date_due   = db.Column(db.String(64), nullable=False)
-#     status     = db.Column(db.String(32), nullable=False)
-#     client_id  = db.Column(db.Integer, db.ForeignKey("client.id"), nullable=False)
-
-
-# with app.app_context():
-#     db.create_all()
+# class Client(db.Model): ...
+# class Invoice(db.Model): ...
 
 # ─────────────────────── 3. LOCAL TOOL FUNCTIONS ─────────────
 HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
-
 
 @functools.lru_cache(maxsize=1_024)
 def _coords_for(city: str) -> tuple[float, float] | None:
@@ -197,6 +195,7 @@ def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
 
 # ───────────────────────── 3a. TOOL SCHEMA ───────────────────
 TOOLS = [
+    # local function-tools …
     {
         "type": "function",
         "name": "get_current_weather",
@@ -231,75 +230,93 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
-    # {
-    #     "type": "mcp",                # Remote MCP server
-    #     "server_label": "company_info",
-    #     "server_url": MCP_SERVER_URL,
-    #     "require_approval": "never", 
-    #     "allowed_tools": ["test_company_info"],
-    #     "cache_for_seconds": 50, 
-    # },
-    # {
-    #     "type": "mcp",
-    #     "server_label": "deepwiki",
-    #     "server_url": "https://vorovik.pythonanywhere.com/",
-    #     "require_approval": "never",
-    #     "allowed_tools": ["ask_question"],
-    # }
-    # FCC tools left commented out for brevity
-    # {
-    #     "type": "function",
-    #     "name": "fcc_search_filings",
-    #     "description": "Search FCC ECFS for all PDF attachments of a company",
-    #     "parameters": {
-    #         "type": "object",
-    #         "properties": {
-    #             "company": {
-    #                 "type": "string",
-    #                 "description": "Company name to search for",
-    #             },
-    #         },
-    #         "required": ["company"],
-    #         "additionalProperties": False
-    #     },
-    #     "strict": True,
-    # },
-    # {
-    #     "type": "function",
-    #     "name": "fcc_get_filings_text",
-    #     "description": "Download & parse selected FCC ECFS PDFs and return text",
-    #     "parameters": {
-    #         "type": "object",
-    #         "properties": {
-    #             "company": {"type": "string"},
-    #             "indexes": {
-    #                 "type": "array",
-    #                 "items": {"type": "integer"},
-    #                 "description": "1-based indexes from fcc_search_filings",
-    #             },
-    #         },
-    #         "required": ["company", "indexes"],
-    #         "additionalProperties": False
-    #     },
-    #     "strict": True,
-    # },
+    # ─────────────── new MCP Agent tool ───────────────
+    {
+        "type": "function",
+        "name": "ask_mcp_agent",
+        "description": (
+            "Delegate the user's request to an external MCP-powered agent "
+            "that can perform multi-step reasoning and live data retrieval. "
+            "Return the agent's final textual answer."
+        ),
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Full user question to send to the agent"
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
 ]
-
-# MCP_URL_BY_LABEL = {
-#     t["server_label"]: t["server_url"]
-#     for t in TOOLS if t.get("type") == "mcp"
-# }
 
 DISPATCH = {
     "get_current_weather": get_current_weather,
     "get_invoice_by_id":   get_invoice_by_id,
-    # "fcc_search_filings":  fcc_search_filings,
-    # "fcc_get_filings_text": fcc_get_filings_text,
+    "ask_mcp_agent":       lambda query: _run_agent(query),   # ← new mapping
 }
 
 @app.before_request
 def _log():
     print("MCP <--", request.method, request.path)
+
+# ──────────── AGENTS: helper functions & heuristics ──────────
+# def _needs_agent(user_text: str) -> bool:
+#     """
+#     Very simple heuristic: decide whether the incoming message
+#     should be routed to the OpenAI Agent (MCP) instead of regular
+#     Responses tool-calling.
+#     Adjust this logic to your production criteria.
+#     """
+#     triggers = (
+#         "secret word",
+#         "deepwiki",
+#         "mcp",
+#         "add these numbers",
+#         "weather in",      # demo trigger
+#     )
+#     text = user_text.lower()
+#     return any(t in text for t in triggers)
+
+
+async def _run_agent_async(user_text: str, previous_response_id: str | None = None) -> str:
+    """
+    Run the OpenAI Agent against the external MCP server and
+    return final text output.
+    """
+    MCP_TIMEOUT = httpx.Timeout(15.0, connect=5.0, read=10.0)
+
+    async with MCPServerStreamableHttp(
+        name="External MCP Server",
+        params={"url": MCP_SERVER_URL.strip()},
+    ) as mcp_server:
+        agent = Agent(
+            name="Assistant",
+            instructions="You are a helpful assistant. "
+                         "Use the MCP tools when appropriate.",
+            mcp_servers=[mcp_server],
+            model=AGENT_MODEL,
+            model_settings=ModelSettings(tool_choice="required"),
+            # model="gpt-4.1-nano",
+        )
+
+        result = await Runner.run(
+            starting_agent=agent,
+            input=user_text,
+            previous_response_id=previous_response_id,
+            max_turns=AGENT_MAX_TURNS,
+        )
+        return result.final_output
+
+
+def _run_agent(user_text: str, previous_response_id: str | None = None) -> str:
+    """Thin synchronous wrapper around the async agent run."""
+    return _run_sync(_run_agent_async(user_text, previous_response_id))
+# ─────────────────────────────────────────────────────────────
 
 # ─────────────────────── 4. STREAM HANDLER ───────────────────
 def _run_tool(name: str, args: str) -> str:
@@ -338,7 +355,7 @@ def _finish_tool(
             }],
             previous_response_id=response_id,
             instructions=INSTRUCTIONS,
-            tools=TOOLS,
+            # tools=TOOLS,
             stream=True,
         )
         return _pipe(follow, q, run_id)
@@ -476,11 +493,8 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """
-    POST JSON  {
-        "message":               "<user text>",
-        "previous_response_id":  "<id from last meta event, optional>"
-    }
-    Returns an SSE stream with:
+    POST JSON  { "message": "<user text>", "previous_response_id": "<id>" }
+    Returns an SSE stream:
       • assistant tokens         → default event
       • meta event               → {"prev_id": "..."} once per turn
       • done sentinel            → event: done / data: [DONE]
@@ -497,6 +511,63 @@ def chat_stream():
 
     @copy_current_request_context
     def work() -> None:
+        # ────── AGENTS branch: run via OpenAI Agent if needed ───
+        # if _needs_agent(msg):
+        #     try:
+        #         # 1) record the user's message into Responses
+        #         user_evt = client.responses.create(
+        #             model=MODEL,
+        #             input=msg,
+        #             # role="user",
+        #             previous_response_id=last_resp_id,
+        #             instructions=INSTRUCTIONS,
+        #         )
+        #         # conversation_id   = user_evt.conversation_id
+        #         prev_resp_id_user = user_evt.id
+
+        #         # 2) run the Agent (MCP) and get assistant text
+        #         assistant_reply = _run_agent(
+        #             msg,
+        #             previous_response_id=prev_resp_id_user,
+        #         )
+
+        #     #     # 3) store assistant reply in the same conversation
+        #     #     asst_evt = client.responses.create(
+        #     #         model=MODEL,
+        #     #         input=[
+        #     #             {"role": "assistant", "content": assistant_reply}
+        #     #             ],
+        #     #         # role="assistant",
+        #     #         # input=[assistant_reply],
+        #     #         # conversation_id=conversation_id,
+        #     #         # parent_response_id=prev_resp_id_user,
+        #     #         previous_response_id=prev_resp_id_user,          # use chain-id only
+        #     #         instructions=INSTRUCTIONS,
+        #     #     )
+
+        #     #     # 4) stream reply tokens to SSE
+        #     #     q.put({"meta": {"prev_id": asst_evt.id}})
+        #     #     for tok in assistant_reply.split():
+        #     #         q.put(tok + " ")
+        #     #     q.put(None)
+        #     # 3) write + stream assistant reply via Responses → _pipe will push SSE
+        #         asst_stream = client.responses.create(
+        #             model=MODEL,
+        #             input=[{"role": "assistant", "content": assistant_reply}],
+        #             previous_response_id=prev_resp_id_user,
+        #             instructions=INSTRUCTIONS,
+        #             stream=True,                      # 
+        #         )
+        #         _pipe(asst_stream, q)                 # sends meta / tokens / done
+        #     except Exception as exc:  # pylint: disable=broad-except
+        #         log.error("Agent run failed: %s", exc)
+        #         q.put(str(exc))
+        #         q.put(None)
+
+
+        #     return  # do NOT proceed to default branch
+
+        # ────── Default branch: use Responses API directly ──────
         try:
             stream = client.responses.create(
                 model=MODEL,
@@ -510,15 +581,7 @@ def chat_stream():
             )
             _pipe(stream, q)
         except Exception as exc:  # pylint: disable=broad-except
-            if "Error retrieving tool list from MCP server" in str(exc):
-                label = str(exc).split("'")[1]          # 'company_info'
-                # log.error(
-                #     "MCP list failed for %s → %s : %s",
-                #     label, MCP_URL_BY_LABEL.get(label, "<?>"), exc
-                #     )
-            else:
-                log.error("OpenAI stream failed: %s", exc)
-                #log.error("OpenAI stream failed: %s", exc)
+            log.error("OpenAI stream failed: %s", exc)
             q.put(str(exc))
         finally:
             q.put(None)
@@ -629,34 +692,7 @@ def export_invoice(invoice_id: int | None = None):
             "Content-Disposition": f'attachment; filename="{fname}"',
         },
     )
-
 # ───────────────────────── 8. RUN APP ────────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)
-
-# if __name__ == "__main__":
-#     # demo, we'll run it locally at http://localhost:8000/mcp
-#     process: subprocess.Popen[Any] | None = None
-#     try:
-#         this_dir = os.path.dirname(os.path.abspath(__file__))
-#         server_file = os.path.join(this_dir, "mcp_server.py")
-
-#         print("Starting Streamable HTTP server at http://localhost:8000/mcp ...")
-
-#         # Run `uv run server.py` to start the Streamable HTTP server
-#         process = subprocess.Popen(["python", server_file])
-#         # Give it 3 seconds to start
-#         time.sleep(3)
-
-#         print("Streamable HTTP server started. Running example...\n\n")
-#     except Exception as e:
-#         print(f"Error starting Streamable HTTP server: {e}")
-#         exit(1)
-
-#     try:
-#         # asyncio.run(main())
-#         asyncio.run (app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False))
-#     finally:
-#         if process:
-#             process.terminate()
