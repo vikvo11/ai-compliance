@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  mcp:
+    platform: linux/amd64 
+    build: ./mcp            # or image: your/mcp:latest
+    container_name: mcp
+    expose:                 # 
+      - "8000"              # 8000 ⇐ inside of network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      retries: 3
+
+  app:
+    platform: linux/amd64 
+    build: ./app            #  Flask
+    container_name: flask
+    depends_on:
+      mcp:
+        condition: service_healthy
+    ports:
+      - "5005:5005"         # outside
+    environment:
+      MCP_SERVER_URL: "http://mcp:8000/mcp"   # ← mcp server!

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI-Powered Compliance Filing</title>
+
+  <!-- Inline CSS (здесь только стили лендинга, без встроенного чата) -->
+  <style>
+  /* ========= Base ========= */
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+       background:#f9fafb;color:#1f2937;line-height:1.6;overflow-x:hidden}
+  :root{--clr-primary:#2563eb;--clr-primary-dark:#1e3a8a;--clr-secondary:#facc15}
+
+  h1,h2,h3{color:#0f172a;line-height:1.2;margin-bottom:.75rem}
+  h1{font-size:2.7rem} h2{font-size:2rem;text-align:center} h3{font-size:1.25rem}
+  p{margin-bottom:1rem}
+  .container{max-width:1100px;padding:0 1rem;margin:auto}
+  .btn{display:inline-block;padding:.8rem 1.6rem;border-radius:10px;font-weight:600;color:#fff;
+       background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));
+       text-decoration:none;transition:transform .3s,box-shadow .3s;cursor:pointer}
+  .btn:hover{transform:translateY(-4px);box-shadow:0 10px 25px rgba(0,0,0,.15)}
+
+  /* ========= Hero ========= */
+  header{background:linear-gradient(135deg,var(--clr-primary-dark),var(--clr-primary));
+         color:#fff;padding:5rem 1rem;text-align:center}
+  header h1{font-size:3rem;margin-bottom:1rem} header p{font-size:1.125rem;margin-bottom:2rem}
+
+  /* ========= Cards / Sections ========= */
+  section{padding:4rem 0}
+  .grid-3{display:grid;gap:2rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{background:#fff;border-radius:16px;padding:2rem;box-shadow:0 4px 18px rgba(0,0,0,.05);
+        transition:transform .3s,box-shadow .3s;cursor:pointer;position:relative;overflow:hidden}
+  .card:hover{transform:translateY(-8px) scale(1.03);box-shadow:0 12px 30px rgba(0,0,0,.12)}
+  .icon{font-size:2.7rem;margin-bottom:1rem;transition:transform .5s}
+  .card:hover .icon{transform:rotate(10deg) scale(1.1)}
+  .card::before{content:"";position:absolute;bottom:0;left:50%;width:0;height:4px;
+                background:var(--clr-secondary);transition:width .3s,left .3s}
+  .card:hover::before{width:60%;left:20%}
+
+  /* ========= Terminal demo ========= */
+  .terminal{background:#0f172a;color:#d1fae5;border-radius:12px;padding:1rem;
+            font-family:monospace;font-size:.9rem;line-height:1.4;min-height:110px}
+  .cursor{display:inline-block;width:8px;background:#d1fae5;margin-left:2px;
+          animation:blink 1s steps(2,start) infinite}
+  @keyframes blink{to{background:transparent}}
+
+  /* ========= Diagram ========= */
+  .diagram{display:flex;justify-content:center;margin-top:2rem}
+  .node{fill:#fff;stroke:#cbd5e1;stroke-width:2}
+  .node-text{font-size:14px;fill:#0f172a;font-weight:600;text-anchor:middle;dominant-baseline:middle}
+  .arrow{stroke:var(--clr-primary);stroke-width:2;marker-end:url(#ah)}
+
+  /* ========= Glass CTA & Fade ========= */
+  .glass{background:rgba(255,255,255,.15);backdrop-filter:blur(45px);
+         border-radius:16px;padding:3rem;text-align:center;margin:auto;max-width:800px}
+  .fade{opacity:0;transform:translateY(40px);transition:opacity .8s ease,transform .8s ease}
+  .fade.show{opacity:1;transform:none}
+
+  /* ========= Overlay & Toast ========= */
+  #drop-area{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);color:#fff;
+             font-size:1.5rem;font-weight:bold;align-items:center;justify-content:center;z-index:999}
+  #toast-container{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;
+                   gap:10px;z-index:9999}
+  .toast{background:#22c55e;color:#fff;padding:.8rem 1rem;border-radius:8px;font-weight:600;
+         min-width:200px;box-shadow:0 2px 8px rgba(0,0,0,.2);transition:opacity .8s}
+
+  /* ========= Theme ========= */
+  #theme-toggle{position:fixed;top:16px;right:16px;z-index:9999;background:none;border:none;
+                color:#fff;font-size:1.5rem;cursor:pointer}
+  .night-theme{background:radial-gradient(ellipse at bottom,#0d1a2b 0%,#000 100%)!important;color:#e0e0e0}
+  .night-theme header,.night-theme footer{background:transparent!important}
+  .stars{position:fixed;inset:0;z-index:0;background:#000
+         url('https://www.transparenttextures.com/patterns/stardust.png') repeat top center;
+         pointer-events:none;opacity:.6;display:none}
+
+  /* ========= Crack-glass vibration ========= */
+  .vibrate{animation:vibrate .15s linear infinite}
+  @keyframes vibrate{0%{transform:translate(0)}
+                     25%{transform:translate(-2px,2px)}
+                     50%{transform:translate(2px,-2px)}
+                     75%{transform:translate(-1px,1px)}
+                     100%{transform:translate(0)}}
+  </style>
+</head>
+
+<body>
+  <!-- Night theme stars -->
+  <div class="stars" id="star-background"></div>
+  <button id="theme-toggle" title="Toggle Theme">🌙</button>
+
+  <!-- Toasts & drag-drop overlay -->
+  <div id="toast-container"></div>
+  <div id="drop-area"
+       ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
+    Drop CSV file here
+  </div>
+
+  <!-- Hero -->
+  <header>
+    <div style="display:flex;align-items:center;justify-content:center;gap:1rem;flex-wrap:wrap">
+      <img src="https://img.icons8.com/color/96/artificial-intelligence.png" alt="Logo" style="height:48px">
+      <h1>AI-Powered Compliance Filing</h1>
+    </div>
+    <p>From document to regulator in minutes — automated by GPT-4 & RPA.</p>
+    <a href="#story" class="btn">See How It Works</a>
+  </header>
+
+  <!-- Story / Upload -->
+  <section id="story" class="fade">
+    <div class="container">
+      <h2>Meet Your AI Compliance Assistant</h2>
+
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          {% for m in messages %}
+            <div style="margin-top:1rem;color:green;font-weight:600">{{ m }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <div class="grid-3" style="margin-top:3rem">
+        <!-- Upload -->
+        <div class="card">
+          <div class="icon">📄</div><h3>Upload Documents</h3>
+          <p>Drag &amp; drop invoices or financials.</p>
+          {% if invoices|length %}
+            <div style="text-align:center;margin-top:2rem">
+              <button onclick="toggleInvoices()" class="btn">Show Uploaded Invoices</button>
+            </div>
+          {% endif %}
+        </div>
+        <!-- Extract -->
+        <div class="card" id="ai-extract-block">
+          <div class="icon">🤖</div><h3>AI Extracts Data</h3>
+          <p>GPT-4 parses &amp; validates every field.</p>
+          <canvas id="crack-effect" width="300" height="200"
+                  style="position:absolute;top:0;left:0;display:none;pointer-events:none;z-index:10"></canvas>
+        </div>
+        <!-- Filing -->
+        <div class="card">
+          <div class="icon">✅</div><h3>Instant Filing</h3>
+          <p>RPA bots submit the forms &amp; store receipts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Invoice table -->
+  {% if invoices|length %}
+  <section id="invoices" class="fade">
+    <div class="container" style="text-align:center">
+      <div id="invoiceTable"
+           style="margin-top:2rem;display:none;text-align:left;overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="padding:8px;border-bottom:1px solid #ccc">Client</th>
+              <th style="padding:8px;border-bottom:1px solid #ccc">Invoice ID</th>
+              <th style="padding:8px;border-bottom:1px solid #ccc">Amount</th>
+              <th style="padding:8px;border-bottom:1px solid #ccc">Due Date</th>
+              <th style="padding:8px;border-bottom:1px solid #ccc">Status</th>
+              <th style="padding:8px;border-bottom:1px solid #ccc">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invoices %}
+            <tr>
+              <td id="invoice-{{ inv.id }}-client"     style="padding:8px;border-bottom:1px solid #eee">{{ inv.client.name }}</td>
+              <td id="invoice-{{ inv.id }}-invoiceID"  style="padding:8px;border-bottom:1px solid #eee">{{ inv.invoice_id }}</td>
+              <td id="invoice-{{ inv.id }}-amount"     style="padding:8px;border-bottom:1px solid #eee">${{ '%.2f' % inv.amount }}</td>
+              <td id="invoice-{{ inv.id }}-due"        style="padding:8px;border-bottom:1px solid #eee">{{ inv.date_due }}</td>
+              <td id="invoice-{{ inv.id }}-status"     style="padding:8px;border-bottom:1px solid #eee">{{ inv.status }}</td>
+              <td style="padding:8px;border-bottom:1px solid #eee">
+                <a class="btn" href="/export/{{ inv.id }}" style="padding:0.3rem 1rem;font-size:.8rem">Download</a>
+                <button class="btn" onclick="toggleEdit({{ inv.id }})"
+                        style="padding:0.3rem 1rem;font-size:.8rem">Edit</button>
+                <form method="POST" action="/delete/{{ inv.id }}"
+                      onsubmit="return confirm('Are you sure you want to delete this invoice?')"
+                      style="display:inline-block">
+                  <button class="btn" style="padding:0.3rem 1rem;font-size:.8rem;background:#ef4444">Delete</button>
+                </form>
+              </td>
+            </tr>
+            <!-- inline edit row -->
+            <tr id="edit-row-{{ inv.id }}" style="display:none;background:#f9f9f9">
+              <td colspan="6">
+                <form onsubmit="saveInvoice(event, {{ inv.id }})"
+                      style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                  <input type="email"   name="client_email" value="{{ inv.client.email or '' }}" placeholder="Client Email">
+                  <input type="number"  name="amount"       step="0.01" value="{{ inv.amount }}" placeholder="Amount">
+                  <input type="text"    name="date_due"     value="{{ inv.date_due }}" placeholder="Due Date">
+                  <select name="status">
+                    <option value="unpaid" {% if inv.status=='unpaid' %}selected{% endif %}>Unpaid</option>
+                    <option value="paid"   {% if inv.status=='paid'   %}selected{% endif %}>Paid</option>
+                  </select>
+                  <button class="btn" style="padding:0.3rem 1rem;font-size:.8rem">Save</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div style="margin-top:.5rem;text-align:left">
+          <a href="/export" class="btn" style="padding:.4rem 1rem;font-size:.75rem">Download CSV</a>
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- Demo & Code sections remain unchanged … -->
+
+  <footer style="padding:2rem 0;text-align:center;color:#6b7280;font-size:.9rem">
+    © 2025 AI Compliance Filing
+  </footer>
+
+  <!-- Page JS -->
+  <script src="{{ url_for('static', filename='js/main.js') }}" defer></script>
+
+  <!-- External Chat Widget -->
+  <script
+      src="{{ url_for('static', filename='js/chat-widget.js') }}"
+      data-backend="http://127.0.0.1:5005"
+      data-key="MY_PARTNER_KEY"
+      defer></script>
+</body>
+</html>

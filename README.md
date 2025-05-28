@@ -38,3 +38,4 @@ export ALLOWED_ORIGINS='{
 }'
 
  uv run python app.py
+docker compose up --build
