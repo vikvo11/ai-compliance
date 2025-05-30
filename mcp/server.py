@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 start_time = time.time()
 
 # Create server
-mcp = FastMCP("Echo Server")
+mcp = FastMCP("Echo Server",host="0.0.0.0", port=8000)
 
 # Keep your own registry of tool names
 tool_names = []
@@ -67,10 +67,4 @@ async def health_check(request: Request) -> JSONResponse:
 
 
 if __name__ == "__main__":
-    # Run with Streamable HTTP (default host=127.0.0.1, port=8000, path=/mcp)
     mcp.run(transport="streamable-http")
-#     mcp.run(
-#     transport="streamable-http",
-#     host="0.0.0.0",     #
-#     port=8000
-# )

@@ -75,7 +75,7 @@ os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
 MCP_SERVER_URL = cfg.get(
     "DEFAULT",                         # defined in cfg/openai.cfg
     "MCP_SERVER_URL",                  # MCP_SERVER_URL = http://localhost:5006
-    fallback=os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp"),
+    fallback=os.getenv("MCP_SERVER_URL"),
 )
 
 # ----- propagate FCC key to environment ----------------------
@@ -288,11 +288,13 @@ async def _run_agent_async(user_text: str, previous_response_id: str | None = No
     Run the OpenAI Agent against the external MCP server and
     return final text output.
     """
-    MCP_TIMEOUT = httpx.Timeout(15.0, connect=5.0, read=10.0)
+    # MCP_TIMEOUT = httpx.Timeout(15.0, connect=5.0, read=10.0)
 
     async with MCPServerStreamableHttp(
         name="External MCP Server",
-        params={"url": MCP_SERVER_URL.strip()},
+        params={"url": MCP_SERVER_URL.rstrip('/') + '/'},
+        # params={"url": MCP_SERVER_URL.strip()},
+        client_session_timeout_seconds=15,
     ) as mcp_server:
         agent = Agent(
             name="Assistant",
@@ -425,7 +427,14 @@ def _pipe(
                 iid   = item["id"]
                 fname = (item.get("function", {}) or item.get("tool_call", {})).get("name") or item.get("name")
                 call_id = item.get("call_id") or iid
-                buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
+                # buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
+                full_args = (item.get("function", {}) or item.get("tool_call", {})).get("arguments")
+                if full_args:
+                    response_id = _finish_tool(
+                    response_id, run_id, call_id, fname, full_args, q
+                   )
+                else: 
+                    buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
         # ───────── accumulate argument chunks ──────────────────────
         if "arguments.delta" in typ:
