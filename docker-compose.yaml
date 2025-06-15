@@ -14,6 +14,9 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       retries: 3
+    environment:
+      TELCO_BASE_URL: "https://semantic-lookup-v2-821847034291.us-central1.run.app"
+      TELCO_QUERY_KEY: "qk_live_1a3f69c5e84b4be9a5f01f2cd3e2d7e9"
 
   # Business-logic Flask app that talks to MCP
   app:
