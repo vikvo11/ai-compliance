@@ -17,4 +17,15 @@ docker rm -f ai-compliance-container 2>/dev/null
 
 # Step 4: Run new container
 echo "Running new Docker container..."
-docker run --name ai-compliance-container -p 5005:5005 -v $(pwd)/data:/app/data ai-compliance
+#docker run --name ai-compliance-container -p 5005:5005 -v $(pwd)/data:/app/data ai-compliance
+# docker run --rm -p 5005:5005 \
+#   -e HTTPX_LOG_LEVEL=debug \
+#   -v $(pwd)/data:/app/data \
+#   --name ai-compliance-container ai-compliance
+docker run --rm \
+  -p 5005:5005 \
+  -e OPENAI_LOG=debug \
+  -e HTTPX_LOG_LEVEL=debug \
+  -v "$(pwd)/data":/app/data \
+  --name ai-compliance-container ai-compliance
+

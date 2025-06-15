@@ -9,10 +9,10 @@ __pycache__/
 *.db
 
 # Local data and temp directories
-data/
-tmp/
-tmp/**
+*/data/
+*/tmp/
+*/tmp/**
 
 # Local config
-cfg/*.cfg
-cfg/openai.cfg
+*/cfg/*.cfg
+*/cfg/openai.cfg

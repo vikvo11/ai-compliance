@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>JS Loader</title>
+  {% for script in scripts %}
+    <script src="{{ script.src }}"
+            {% if script.backend %} data-backend="{{ script.backend }}"{% endif %}
+            {% if script.stream %} data-stream="{{ script.stream }}"{% endif %}
+            {% if script.key %} data-key="{{ script.key }}"{% endif %}
+            {% if script.allowed_origin %} data-allowed-origin="{{ script.allowed_origin }}"{% endif %}
+            {% if script.defer %} defer{% endif %}></script>
+
+  {% endfor %}
+</head>
+<body>
+  <h1>JS Loader</h1>
+  <form method="post">
+    <input type="text" name="script_url" placeholder="Enter JS URL" required>
+    <input type="text" name="backend" placeholder="data-backend (optional)">
+    <input type="text" name="key" value="MY_PARTNER_KEY" placeholder="data-key">
+    <input type="text" name="allowed_origin" value="https://client.com" placeholder="data-allowed-origin">
+    
+    <label>
+      <input type="checkbox" name="stream" checked> data-stream
+    </label>
+    <label>
+      <input type="checkbox" name="defer" checked> defer
+    </label>
+
+    <button type="submit">Add Script</button>
+  </form>
+  <h2>Current Scripts</h2>
+  <ul>
+    {% for script in scripts %}
+      <li>
+        {{ script.src }}
+        <form action="{{ url_for('delete_script', script_id=loop.index0) }}" method="post" style="display:inline">
+          <button type="submit">Delete</button>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+</body>
+</html>

@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  # Remote MCP server
+  mcp:
+    platform: linux/amd64
+    build: ./mcp            # Dockerfile for the MCP Flask service
+    container_name: mcp
+    ports:
+      - "8000:8000"         # publish to host
+    expose:                 # internal port only
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      retries: 3
+    environment:
+      TELCO_BASE_URL: "https://semantic-lookup-v2-821847034291.us-central1.run.app"
+      TELCO_QUERY_KEY: "qk_live_1a3f69c5e84b4be9a5f01f2cd3e2d7e9"
+
+  # Business-logic Flask app that talks to MCP
+  app:
+    platform: linux/amd64
+    build: ./app            # Dockerfile for the main Flask app
+    container_name: flask
+    depends_on:
+      mcp:
+        condition: service_healthy
+    ports:
+      - "5005:5005"         # publish to host
+    environment:
+      MCP_SERVER_URL: "http://mcp:8000/mcp/"   # points at the mcp container
+
+  # Front-end / demo UI running on uvicorn (port 8001 inside)
+  ui:
+    platform: linux/amd64
+    build: ./ui             # Dockerfile we prepared earlier
+    container_name: ui
+    depends_on:
+      app:
+        condition: service_started          # wait until app is at least starting
+    ports:
+      - "5006:5006"         # hostPort:containerPort
+    expose:
+      - "8001"              # optional, for internal DNS discoverability
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5006/health"]
+      interval: 10s
+      retries: 3
+    environment:
+      # If the UI needs to reach the Flask app, set its base URL here
+      APP_BASE_URL: "http://flask:5005"
