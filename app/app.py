@@ -6,14 +6,15 @@
 # All comments are in English (per user preference).
 
 """
-Changelog (2025-06-16)
+Changelog (2025-06-16 → 2025-06-17)
 
 • FIX  multiple tool calls were cut off because nested _pipe() sent q.put(None)
        too early ➜ added depth counter; only outermost level closes SSE.
 • FIX  schema for get_current_weather — 'unit' no longer required; default stays.
 • CHG  _finish_tool() now forwards tools+flags to follow-up call (safer).
 • CHG  _finish_tool() calls _pipe(..., depth+1).
-• Cosmetic typing / logging tweaks.
+• NEW  optional debug events: every tool invocation is pushed to the SSE stream
+       (event: debug) so the front-end console can show them live.
 """
 
 from __future__ import annotations
@@ -301,7 +302,7 @@ TOOLS: list[dict] = [
                     "default": "celsius",
                 },
             },
-            # FIX: only 'location' is required
+            # only 'location' is required
             "required": ["location"],
             "additionalProperties": False,
         },
@@ -455,6 +456,16 @@ def _finish_tool(
         log.error("Tool '%s' failed: %s", name, exc)
         output = f"ERROR: {exc}"
 
+    # ── push debug event (optional, front-end will listen to event: debug)
+    try:
+        q.put({"debug": {
+            "tool":   name,
+            "args":   json.loads(args_json or "{}"),
+            "output": str(output)[:500]   # truncate large blobs
+        }})
+    except Exception:
+        pass
+
     try:
         follow = client.responses.create(
             model=MODEL,
@@ -465,12 +476,12 @@ def _finish_tool(
             }],
             previous_response_id=response_id,
             instructions=INSTRUCTIONS,
-            tools=TOOLS,                # CHG: forward same tool set
+            tools=TOOLS,                # forward same tool set
             tool_choice="auto",
             parallel_tool_calls=True,
             stream=True,
         )
-        return _pipe(follow, q, run_id, depth + 1)   # CHG: nested depth
+        return _pipe(follow, q, run_id, depth + 1)   # nested depth
     except Exception as exc:   # pylint: disable=broad-except
         log.error("Failed to send tool output: %s", exc)
         q.put(str(exc))
@@ -484,7 +495,7 @@ def _pipe(
 ) -> str:
     """
     Forward an OpenAI streaming response to the SSE queue, handling tools.
-    depth==0 ➜ only the outermost level sends None → closes SSE.
+    depth==0 → only the outermost level closes SSE.
     """
     response_id  = ""
     meta_sent    = False
@@ -583,6 +594,10 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
                 yield b"event: meta\ndata: " + json.dumps(tok["meta"]).encode() + b"\n\n"
                 continue
 
+            if isinstance(tok, dict) and "debug" in tok:
+                yield b"event: debug\ndata: " + json.dumps(tok["debug"]).encode() + b"\n\n"
+                continue
+
             if isinstance(tok, dict) and "resp_id" in tok:
                 session["prev_response_id"] = tok["resp_id"]
                 session.modified = True
@@ -646,7 +661,7 @@ def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
 # ───────────────────── 9. FLASK ENDPOINTS ────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
-    """SSE endpoint that streams assistant tokens + meta + done."""
+    """SSE endpoint that streams assistant tokens + meta + debug + done."""
     data = request.get_json(force=True, silent=True) or {}
     msg  = (data.get("message") or "").strip()
     if not msg:
@@ -689,8 +704,8 @@ def index():
 
         t0 = time.perf_counter()
         df = pd.read_csv(f)
-        new_clients: dict[str, Client] = {}
-        invoices: list[Invoice] = []
+        new_clients: dict[str, "Client"] = {}
+        invoices: list["Invoice"] = []
 
         for _, row in df.iterrows():
             name = row["client_name"]
