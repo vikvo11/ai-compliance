@@ -7,4 +7,4 @@ configparser
 requests>=2.0.0
 pdfplumber
 FastMCP>=2.5.1
-openai-agents>=0.0.16
+openai-agents>=0.0.17

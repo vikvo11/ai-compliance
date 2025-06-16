@@ -17,7 +17,6 @@ import threading
 import asyncio
 import functools
 import logging
-from threading import Lock                     # NEW
 from collections.abc import Generator
 from typing import Any, Callable
 
@@ -58,36 +57,14 @@ cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-DEFAULT_MODEL  = cfg.get("DEFAULT", "model",         fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-
+MODEL          = cfg.get("DEFAULT", "model",         fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
 if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
 
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 
-# The model may change at runtime via /config
-MODEL: str = DEFAULT_MODEL                              # guarded by CONFIG_LOCK
-AVAILABLE_MODELS = [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano"
-,
-]
-
-# ─────────────── 1a. GLOBAL CONFIG (MODEL & INSTRUCTIONS) ───────────────
-try:
-    with open("responcess_api_instructions.cfg", "r", encoding="utf-8") as f:
-        INSTRUCTIONS: str = f.read().strip()
-except OSError as exc:
-    log.warning("Failed to load instructions.cfg: %s", exc)
-    INSTRUCTIONS = ""
-
-CONFIG_LOCK = Lock()   # protects MODEL and INSTRUCTIONS
-
-# ─────────────────── 1b. AGENT / MCP REGISTRY ───────────────────
+# ─────────────────── 1a. AGENT / MCP REGISTRY ───────────────────
 AGENTS: dict[str, str] = {
     "telco": cfg.get("DEFAULT", "MCP_SERVER_URL", fallback=os.getenv("MCP_SERVER_URL", "")).rstrip("/"),
     # You can append more: "finance": "http://finance-mcp:8001"
@@ -113,44 +90,6 @@ register_cors(app)
 
 # class Client(db.Model): ...
 # class Invoice(db.Model): ...
-
-# ───────────────────────── 2a. /config ENDPOINT ─────────────────────────
-@app.route("/config", methods=["GET", "POST", "OPTIONS"])
-def config_endpoint():
-    """
-    GET  → return current MODEL and INSTRUCTIONS.
-    POST → JSON body { "model": "<model>", "instructions": "<text>" }
-            • any key may be omitted (partial update)
-            • validates the model against AVAILABLE_MODELS
-    """
-    global MODEL, INSTRUCTIONS 
-
-    if request.method == "GET":
-        with CONFIG_LOCK:
-            return jsonify({
-                "model": MODEL,
-                "instructions": INSTRUCTIONS,
-                "available_models": AVAILABLE_MODELS,
-            })
-
-    data = request.get_json(force=True, silent=True) or {}
-    new_model        = data.get("model")
-    new_instructions = data.get("instructions")
-
-    with CONFIG_LOCK:
-        if new_model:
-            if new_model not in AVAILABLE_MODELS:
-                return jsonify({"error": f"Model '{new_model}' not allowed"}), 400
-            # global MODEL
-            MODEL = new_model
-            log.info("MODEL changed at runtime to %s", MODEL)
-
-        if isinstance(new_instructions, str):
-            # global INSTRUCTIONS
-            INSTRUCTIONS = new_instructions
-            log.info("INSTRUCTIONS updated (length=%d chars)", len(INSTRUCTIONS))
-
-        return jsonify({"ok": True, "model": MODEL, "instructions": INSTRUCTIONS})
 
 # ─────────────────────── 3. LOCAL TOOL FUNCTIONS ─────────────
 @functools.lru_cache(maxsize=1_024)
@@ -221,71 +160,31 @@ def get_invoice_by_id(invoice_id: str) -> dict:
 # ───────────────── 3a. GENERIC MCP FUNCTION ──────────────────
 def _run_mcp_generic(agent: str, base_url: str, tool_name: str, **payload) -> dict | str:
     """
-    Call FastMCP tool <tool_name> via JSON-RPC.
-
-    • POST <base>/mcp/  (added automatically if missing).
-    • RPC method : "tools/call"
-    • Params     : {"name": <tool_name>, "arguments": <payload>}
-    • follow_redirects=True  — handles 307/308 to /mcp/.
-    • Accept      : JSON and text/event-stream.
-    • Returns r.json()["result"] (if present) or r.text.
+    Send <payload> to FastMCP endpoint /<tool_name> and return JSON/text.
     """
-    root = base_url.rstrip("/")
-    url  = (root if root.endswith("/mcp") else root + "/mcp").rstrip("/") + "/"
-
-    rpc_payload = {
-        "jsonrpc": "2.0",
-        "id": int(time.time() * 1000) % 1_000_000,   # simple unique id
-        "method": "tools/call",
-        "params": {
-            "name":      tool_name,
-            "arguments": payload or {},
-        },
-    }
-
-    headers = {
-        "Accept":        "application/json, text/event-stream",
-        "Content-Type":  "application/json",
-    }
-
+    url = f"{base_url.rstrip('/')}/{tool_name}"
     try:
-        r = httpx.post(
-            url,
-            json=rpc_payload,
-            headers=headers,
-            timeout=httpx.Timeout(20.0, connect=4.0, read=20.0),
-            follow_redirects=True,
-        )
+        r = httpx.post(url, json=payload, timeout=HTTP_TIMEOUT)
         r.raise_for_status()
     except httpx.HTTPError as exc:
         log.error("MCP %s.%s failed: %s", agent, tool_name, exc)
         return f"MCP error ({agent}.{tool_name}): {exc}"
-
-    ctype = r.headers.get("content-type", "")
-    if "json" in ctype:
-        try:
-            obj = r.json()
-        except ValueError:
-            return r.text
-        # JSON-RPC: result | error
-        if isinstance(obj, dict):
-            if "result" in obj:
-                return obj["result"]
-            if "error" in obj:
-                return f"MCP error ({agent}.{tool_name}): {obj['error']}"
-        return obj
-    # text/event-stream or something else – return as is
-    return r.text
-
-
+    try:
+        return r.json()
+    except ValueError:
+        return r.text
 
 # ───────────────── instructions for Responses API ────────────
-# (INSTRUCTIONS loaded earlier and is mutable via /config)
+try:
+    with open("responcess_api_instructions.cfg", "r", encoding="utf-8") as f:
+        INSTRUCTIONS = f.read().strip()
+except OSError as exc:
+    log.warning("Failed to load instructions.cfg: %s", exc)
+    INSTRUCTIONS = ""
 
 # ───────────────────────── 4. TOOL SCHEMA ────────────────────
 # 4a — local tools (hard-coded)
 TOOLS: list[dict] = [
-    {"type": "web_search"},
     {
         "type": "function",
         "name": "get_current_weather",
@@ -333,7 +232,19 @@ def _register_agent(agent_name: str, base_url: str) -> None:
     """
     Discover tools from a FastMCP server via JSON-RPC and register them
     so that the OpenAI Responses API can call them.
-    (Full implementation unchanged from previous version.)
+
+    Key points
+    ────────────────────────────────────────────────────────────────
+    • Handles 30x redirects (`follow_redirects=True`).
+    • Accept header allows both JSON and SSE (`text/event-stream`).
+    • Supports FastMCP ≥0.4  ({"result": {"tools": …}}) **and**
+      legacy flat-list ({"result": […]}) reply formats.
+    • Converts FastMCP’s `inputSchema` → OpenAI’s `parameters`.
+    • Recursively enforces:
+        – every object schema has `additionalProperties: false`;
+        – every object schema has `required` listing **all** keys in
+          `properties` (OpenAI “strict” mode demands this).
+    ────────────────────────────────────────────────────────────────
     """
     url = f"{base_url.rstrip('/')}/mcp/"
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
@@ -357,21 +268,23 @@ def _register_agent(agent_name: str, base_url: str) -> None:
 
     # ── extract tools list ───────────────────────────────────────
     result = rpc.get("result", {})
-    if isinstance(result, dict) and "tools" in result:
+    if isinstance(result, dict) and "tools" in result:   # FastMCP ≥0.4
         tools = result["tools"]
-    elif isinstance(result, list):
+    elif isinstance(result, list):                       # legacy flat list
         tools = result
     else:
         log.error("Cannot parse tools list from %s: %s", url, rpc)
         return
 
-    # helper to strict-ify schema recursively
+    # ── helper: strict-ify schema recursively ────────────────────
     def _strictify(node: dict) -> dict:
+        """Return a copy with strict requirements for OpenAI."""
         if not isinstance(node, dict):
             return node
         node = {k: _strictify(v) if isinstance(v, dict) else v
                 for k, v in node.items()}
 
+        # recurse into lists of schemas (anyOf / oneOf / allOf / items)
         for key in ("anyOf", "oneOf", "allOf"):
             if key in node and isinstance(node[key], list):
                 node[key] = [_strictify(s) for s in node[key]]
@@ -381,10 +294,13 @@ def _register_agent(agent_name: str, base_url: str) -> None:
         if node.get("type") == "object":
             node.setdefault("properties", {})
             node["additionalProperties"] = False
+            # ensure nested property schemas strict-ified
             node["properties"] = {p: _strictify(s)
                                   for p, s in node["properties"].items()}
+            # ‘required’ must exist and list **every** key
             node["required"] = sorted(node["properties"].keys())
         return node
+    # ─────────────────────────────────────────────────────────────
 
     for raw in tools:
         tname = raw.get("name")
@@ -394,11 +310,19 @@ def _register_agent(agent_name: str, base_url: str) -> None:
             log.warning("Tool %s already registered, skipping", tname)
             continue
 
-        origin_schema = raw.get("parameters") or raw.get("inputSchema") or {}
+        origin_schema = (
+            raw.get("parameters") or
+            raw.get("inputSchema") or
+            {}
+        )
         schema = _strictify(origin_schema)
 
+        # guarantee top-level object
         if schema.get("type") != "object":
-            schema = {"type": "object", "properties": {}, "additionalProperties": False, "required": []}
+            schema = {"type": "object",
+                      "properties": {},
+                      "additionalProperties": False,
+                      "required": []}
 
         spec = {
             "type":        "function",
@@ -418,6 +342,13 @@ def _register_agent(agent_name: str, base_url: str) -> None:
         log.info("Registered tool %s from agent %s", tname, agent_name)
 
     log.info("After %s: total tools = %d", agent_name, len(TOOLS))
+    log.debug("TOOLS now: %s", [t["name"] for t in TOOLS])
+
+
+
+
+
+
 
 # ───────────────────────── 5. UTILITIES ──────────────────────
 @app.before_request
@@ -425,7 +356,7 @@ def _log():
     log.debug("HTTP %s %s", request.method, request.path)
 
 def _run_tool(name: str, args: str) -> str:
-    """Execute a tool and return its result as str."""
+    """Execute a tool and return its result as str (JSON dumped if mapping/sequence)."""
     try:
         params = json.loads(args or "{}")
     except json.JSONDecodeError:
@@ -436,7 +367,10 @@ def _run_tool(name: str, args: str) -> str:
     res = fn(**params)
     return json.dumps(res) if isinstance(res, (dict, list)) else str(res)
 
-# ─────── Everything below is verbatim but now refers to global MODEL/INSTRUCTIONS ───────
+# ─────── Everything below this comment is 1:1 from the previous version ───────
+# _finish_tool, _pipe, sse, _create_stream_with_rescue, chat_stream,
+# CSV CRUD routes, and the __main__ block remain unchanged.
+# (They are reproduced verbatim for completeness.)
 
 def _finish_tool(
     response_id: str,
@@ -496,9 +430,10 @@ def _pipe(
                 early_text.clear()
                 meta_sent = True
 
-        if isinstance(delta, str) and "arguments" not in typ:
+        if isinstance(delta, str) and "arguments" not in typ:  # plain text token
             (q.put if meta_sent else early_text.append)(delta)
 
+        # legacy tool_calls
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 fn_name   = tc.function.name if getattr(tc, "function", None) else tc.name
@@ -510,6 +445,7 @@ def _pipe(
                         response_id, run_id, call_id, fn_name, full_args, q
                     )
 
+        # new schema
         if typ == "response.output_item.added":
             item = (
                 getattr(ev, "item", None)
@@ -529,11 +465,13 @@ def _pipe(
                 else:
                     buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
+        # accumulating chunks
         if "arguments.delta" in typ:
             iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
+        # end of args
         if typ.endswith("arguments.done"):
             iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
@@ -656,6 +594,8 @@ def chat_stream():
     )
 
 # ---------- CSV / CRUD ROUTES & EXPORT (unchanged) ----------
+# (Copy-pasted verbatim from the previous version)
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -753,7 +693,7 @@ if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
     # Discover tools from all configured FastMCP servers
     for agent_name, base_url in AGENTS.items():
-        if not base_url:
+        if not base_url:            # пропускаем, если URL пустой
             log.warning("Agent %s has no base_url → skipped", agent_name)
             continue
         _register_agent(agent_name, base_url)

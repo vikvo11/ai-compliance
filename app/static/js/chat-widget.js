@@ -1,14 +1,17 @@
 /* ============================================================================
-   AI Compliance Chat Widget – embeddable with revised toggle v2.2
+   AI Compliance Chat Widget – embeddable with runtime settings v2.3
    ----------------------------------------------------------------------------
    • Toggle switch (History ON/OFF) to store prevID across reloads.
    • Stores the entire chat conversation when History = ON.
    • "Refresh Chat" button to reset chat + re-add default welcome messages.
    • Forces chatBusy=false on refresh, ensuring user can send new messages.
    • Cancels any ongoing fetch/SSE on refresh so old answers won't appear.
-   • Auto-opens chat after 10s if user hasn't opened it themselves yet.
-   • With a gentle "pop" animation on auto-open to attract attention.
-   • FIX: removed all duplicate declarations to avoid "Cannot redeclare" errors.
+   • Auto-opens chat after 10 s if user hasn’t opened it themselves yet
+     (with a gentle “pop” animation).
+   • NEW (v2.3): “Settings” (⚙) popup lets the operator change:
+       – OpenAI model (dropdown)
+       – Tool-calling INSTRUCTIONS text
+     Changes are sent to `POST /backend/config` and take effect immediately.
 ============================================================================ */
 (() => {
   'use strict';
@@ -121,13 +124,11 @@
 }
 
 /* Gentle "pop" animation for auto-open */
-.aiw-box.aiw-auto-open {
-  animation: aiwBoxPop 0.8s ease-out;
-}
-@keyframes aiwBoxPop {
-  0%   {transform: scale(0.85) translateY(10%); opacity:0;}
-  60%  {transform: scale(1.02) translateY(-2%); opacity:1;}
-  100% {transform: scale(1) translateY(0);}
+.aiw-box.aiw-auto-open { animation: aiwBoxPop 0.8s ease-out; }
+@keyframes aiwBoxPop{
+  0%{transform:scale(0.85) translateY(10%); opacity:0;}
+  60%{transform:scale(1.02) translateY(-2%); opacity:1;}
+  100%{transform:scale(1) translateY(0);}
 }
 
 /* Header */
@@ -139,14 +140,14 @@
 .aiw-box header img{
   width:28px; height:28px; border-radius:50%; background:#fff; padding:2px;
 }
-.aiw-box header .toggle{
+.aiw-box header .toggle,
+.aiw-box header .settings{
   background:none; border:none; color:inherit;
   font-size:1.1rem; cursor:pointer; line-height:1;
   transition:transform .15s;
 }
-.aiw-box header .toggle:hover{transform:scale(1.15);}
-
-/* Refresh chat button */
+.aiw-box header .toggle:hover,
+.aiw-box header .settings:hover{transform:scale(1.15);}
 .aiw-box header .reset-chat{
   background:none; border:none; color:inherit;
   font-size:1rem; cursor:pointer; line-height:1;
@@ -154,38 +155,24 @@
 }
 .aiw-box header .reset-chat:hover{transform:scale(1.15);}
 
-/* History toggle switch (slider) */
+/* History toggle switch */
 .history-wrapper{
-  display:flex; align-items:center;
-  margin-left:auto; margin-right:4px;
+  display:flex; align-items:center; margin-left:auto; margin-right:4px;
 }
-.history-label{
-  margin-right:6px; font-size:13px; opacity:0.9;
-}
-.toggle-history{
-  position:relative; display:inline-block; width:36px; height:18px;
-  margin-right:8px;
-}
-.toggle-history input{
-  opacity:0; width:0; height:0;
-}
+.history-label{margin-right:6px; font-size:13px; opacity:0.9;}
+.toggle-history{position:relative; display:inline-block; width:36px; height:18px; margin-right:8px;}
+.toggle-history input{opacity:0; width:0; height:0;}
 .slider{
   position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0;
-  background-color:rgba(255,255,255,0.6); border-radius:34px;
-  transition:.2s;
+  background-color:rgba(255,255,255,0.6); border-radius:34px; transition:.2s;
 }
 .slider:before{
   position:absolute; content:"";
   height:14px; width:14px; left:2px; bottom:2px;
-  background-color:var(--aiw-primary-dark);
-  border-radius:50%; transition:.2s;
+  background-color:var(--aiw-primary-dark); border-radius:50%; transition:.2s;
 }
-.toggle-history input:checked + .slider{
-  background-color:rgba(255,255,255,0.85);
-}
-.toggle-history input:checked + .slider:before{
-  transform:translateX(18px);
-}
+.toggle-history input:checked + .slider{background-color:rgba(255,255,255,0.85);}
+.toggle-history input:checked + .slider:before{transform:translateX(18px);}
 
 /* Message area */
 .aiw-box .messages{
@@ -195,8 +182,7 @@
 
 /* Footer */
 .aiw-box footer{
-  display:flex; gap:.5rem; padding:.75rem 1rem;
-  border-top:1px solid #f3f4f6;
+  display:flex; gap:.5rem; padding:.75rem 1rem; border-top:1px solid #f3f4f6;
 }
 .aiw-box textarea{
   flex:1; font:inherit; font-size:14px;
@@ -205,8 +191,7 @@
 .aiw-box textarea:focus-visible{outline:2px solid var(--aiw-primary-light);}
 .aiw-box button.send{
   background:var(--aiw-primary); color:var(--aiw-text-on-primary);
-  border:none; padding:.5rem 1rem; border-radius:8px; cursor:pointer;
-  transition:background .2s;
+  border:none; padding:.5rem 1rem; border-radius:8px; cursor:pointer; transition:background .2s;
 }
 .aiw-box button.send:hover{background:var(--aiw-primary-dark);}
 
@@ -215,24 +200,14 @@
   max-width:90%; padding:.75rem; border-radius:10px;
   line-height:1.45; font-size:14px;
 }
-.aiw-box .message.user{
-  background:var(--aiw-user-bg); color:var(--aiw-user-text); margin-left:auto;
-}
-.aiw-box .message.assistant{
-  background:var(--aiw-assistant-bg); color:var(--aiw-assistant-text); margin-right:auto;
-}
-.aiw-box .message.legal-note{
-  background:var(--aiw-user-bg); color:#6b7280; margin-right:auto; font-size:13px;
-}
+.aiw-box .message.user{background:var(--aiw-user-bg); color:var(--aiw-user-text); margin-left:auto;}
+.aiw-box .message.assistant{background:var(--aiw-assistant-bg); color:var(--aiw-assistant-text); margin-right:auto;}
+.aiw-box .message.legal-note{background:var(--aiw-user-bg); color:#6b7280; margin-right:auto; font-size:13px;}
 
 /* Typing indicator */
 .aiw-box .message.assistant.typing{opacity:0.8;}
-.aiw-box .typing::after{
-  content:"."; animation:aiwDots 1.2s steps(3,end) infinite;
-}
-@keyframes aiwDots{
-  0%{content:"."} 33%{content:".."} 66%{content:"..."}
-}
+.aiw-box .typing::after{content:"."; animation:aiwDots 1.2s steps(3,end) infinite;}
+@keyframes aiwDots{0%{content:"."}33%{content:".."}66%{content:"..."}}
 
 /* Quick replies */
 .aiw-box .quick-replies{
@@ -240,8 +215,7 @@
 }
 .aiw-box .quick-replies button{
   background:#eef2ff; color:#1e3a8a; border:none; border-radius:6px;
-  padding:.4rem .75rem; font-size:0.85rem; cursor:pointer;
-  transition:background .2s;
+  padding:.4rem .75rem; font-size:0.85rem; cursor:pointer; transition:background .2s;
 }
 .aiw-box .quick-replies button:hover{background:#e0e7ff;}
 
@@ -253,17 +227,42 @@
 }
 .aiw-box .getInTouch:hover{background:var(--aiw-primary-dark);}
 
-/* Animations */
-@keyframes aiwPulse{
-  0%{transform:rotate(0) scale(1); box-shadow:0 0 0 rgba(37,99,235,0.4);}
-  50%{transform:rotate(-5deg) scale(1.08); box-shadow:0 0 12px rgba(37,99,235,0.6);}
-  100%{transform:rotate(0) scale(1); box-shadow:0 0 0 rgba(37,99,235,0.4);}
+/* Settings modal */
+.aiw-modal{
+  position:fixed; inset:0; background:rgba(0,0,0,.35);
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; visibility:hidden; transition:.2s; z-index:100001;
 }
+.aiw-modal.open{opacity:1; visibility:visible;}
+.aiw-modal .panel{
+  width:420px; max-width:90vw; background:#fff;
+  border-radius:var(--aiw-radius); box-shadow:var(--aiw-shadow);
+  padding:1.25rem 1.5rem; font-family:var(--aiw-font);
+}
+.aiw-modal .panel h2{margin:0 0 1rem; font-size:1.1rem;}
+.aiw-modal label{display:block; margin-bottom:.75rem; font-size:.9rem;}
+.aiw-modal select,
+.aiw-modal textarea{
+  width:100%; font:inherit; font-size:.92rem;
+  padding:.5rem; border:1px solid #d1d5db; border-radius:8px;
+}
+.aiw-modal textarea{resize:vertical; min-height:110px;}
+.aiw-modal .actions{
+  margin-top:1.1rem; display:flex; justify-content:flex-end; gap:.5rem;
+}
+.aiw-modal .actions button{
+  border:none; border-radius:8px; cursor:pointer; font-size:.9rem; padding:.5rem 1rem;
+}
+.aiw-modal .actions .save{background:var(--aiw-primary); color:var(--aiw-text-on-primary);}
+.aiw-modal .actions .cancel{background:#e5e7eb;}
+.aiw-modal .actions .save:hover{background:var(--aiw-primary-dark);}
+.aiw-modal .actions .cancel:hover{background:#d1d5db;}
+
+/* Animations */
+@keyframes aiwPulse{0%{transform:rotate(0) scale(1); box-shadow:0 0 0 rgba(37,99,235,0.4);}50%{transform:rotate(-5deg) scale(1.08); box-shadow:0 0 12px rgba(37,99,235,0.6);}100%{transform:rotate(0) scale(1); box-shadow:0 0 0 rgba(37,99,235,0.4);}}
 `;
   // Inject CSS into <head>
-  document.head.appendChild(Object.assign(document.createElement('style'), {
-    textContent: css
-  }));
+  document.head.appendChild(Object.assign(document.createElement('style'), {textContent: css}));
 
   /* ───────────────────────── 3. DOM CREATION ───────────────────── */
 
@@ -293,25 +292,105 @@
   </div>
 
   <button class="reset-chat" title="Refresh Chat">🔄</button>
+  <button class="settings" title="Settings">⚙</button>
   <button title="Expand" class="toggle">⛶</button>
 </header>
 <div class="messages"></div>
 <footer>
   <textarea rows="2" placeholder="Type your message…"></textarea>
   <button class="send">➤</button>
-</footer>
-`;
+</footer>`;
   document.body.appendChild(box);
 
-  // Some references
-  const toggleBtn     = box.querySelector('.toggle');
-  const historyToggle = box.querySelector('.toggle-history input');
-  const resetChatBtn  = box.querySelector('.reset-chat');
-  const messages      = box.querySelector('.messages');
-  const textarea      = box.querySelector('textarea');
-  const sendBtn       = box.querySelector('.send');
+  // Settings modal
+  const modal = document.createElement('div');
+  modal.className = 'aiw-modal';
+  modal.innerHTML = `
+<div class="panel">
+  <h2>Chat Settings</h2>
+  <form>
+    <label>
+      Model
+      <select name="model"></select>
+    </label>
+    <label>
+      Instructions
+      <textarea name="instructions" placeholder="Optional system instructions…"></textarea>
+    </label>
+    <div class="actions">
+      <button type="button" class="cancel">Cancel</button>
+      <button type="submit" class="save">Save</button>
+    </div>
+  </form>
+</div>`;
+  document.body.appendChild(modal);
 
-  /* ───────────────────────── 4. HELPER FUNCTIONS ───────────────── */
+  /* ───────────────────────── 4. REFERENCES ────────────────────── */
+  const toggleBtn      = box.querySelector('.toggle');
+  const settingsBtn    = box.querySelector('.settings');
+  const historyToggle  = box.querySelector('.toggle-history input');
+  const resetChatBtn   = box.querySelector('.reset-chat');
+  const messages       = box.querySelector('.messages');
+  const textarea       = box.querySelector('textarea');
+  const sendBtn        = box.querySelector('.send');
+
+  // Modal refs
+  const modalForm      = modal.querySelector('form');
+  const modelSelect    = modal.querySelector('select[name=model]');
+  const instrTextarea  = modal.querySelector('textarea[name=instructions]');
+  const modalCancelBtn = modal.querySelector('.cancel');
+
+  /* ───────────────────────── 5. SETTINGS LOGIC ─────────────────── */
+
+  // Load current settings and open modal
+  async function openSettings(){
+    try{
+      const res = await fetch(`${BACKEND}/config`, {method:'GET', mode:'cors'});
+      if(!res.ok) throw new Error('Cannot fetch /config');
+      const cfg = await res.json();
+
+      const defaultModels = [
+        'gpt-4o-mini','gpt-4o','gpt-4o-turbo',
+        'gpt-4-turbo','gpt-3.5-turbo-0125'
+      ];
+      const models = (cfg.available_models || defaultModels).concat(cfg.model || [])
+                     .filter((v,i,a)=>a.indexOf(v)===i);
+
+      modelSelect.innerHTML = models
+        .map(m=>`<option value="${m}" ${m===cfg.model?'selected':''}>${m}</option>`)
+        .join('');
+
+      instrTextarea.value = cfg.instructions || '';
+
+      modal.classList.add('open');
+    }catch(err){
+      console.error('[aiw] settings:',err);
+      alert('Error loading settings');
+    }
+  }
+
+  async function saveSettings(e){
+    e.preventDefault();
+    try{
+      const res = await fetch(`${BACKEND}/config`, {
+        method:'POST',
+        mode:'cors',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          model:modelSelect.value.trim(),
+          instructions:instrTextarea.value.trim()
+        })
+      });
+      const j = await res.json();
+      if(!res.ok || j.error) throw new Error(j.error || 'Save failed');
+      modal.classList.remove('open');
+    }catch(err){
+      console.error('[aiw] save settings:',err);
+      alert(err.message || 'Cannot save settings');
+    }
+  }
+
+  /* ───────────────────────── 6. HELPER FUNCTIONS ───────────────── */
 
   // Basic sanitize to remove <script> tags
   function sanitize(s){
@@ -369,7 +448,7 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
-  /* ───────────────────────── 5. UI EVENTS ─────────────────────── */
+  /* ───────────────────────── 7. UI EVENTS ─────────────────────── */
 
   // Switch between compact/expanded chat
   function setCompact(){
@@ -381,9 +460,10 @@
     isExpanded=true;
   }
 
-  toggleBtn.addEventListener('click', () => {
-    if(isExpanded){ setCompact(); } else { setExpanded(); }
-  });
+  toggleBtn.addEventListener('click', () => { isExpanded ? setCompact() : setExpanded(); });
+  settingsBtn.addEventListener('click', openSettings);
+  modalCancelBtn.addEventListener('click', () => modal.classList.remove('open'));
+  modalForm.addEventListener('submit', saveSettings);
 
   launcher.addEventListener('click', () => {
     const isOpen = (box.style.display==='flex');
@@ -423,7 +503,6 @@
 
   // Quick replies + CTA
   messages.addEventListener('click', e => {
-    // If user clicked on one of the quick-replies buttons
     const clickedBtn = e.target.closest('.quick-replies button');
     if(clickedBtn){
       textarea.value = "I’d like to talk about: " + clickedBtn.textContent.trim();
@@ -443,16 +522,14 @@
       localStorage.removeItem('aiw-prevID');
       localStorage.removeItem('aiw-chat-history');
     } else {
-      if(prevID){
-        localStorage.setItem('aiw-prevID',prevID);
-      }
+      if(prevID){ localStorage.setItem('aiw-prevID',prevID); }
       if(chatHistory.length>0){
         localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
       }
     }
   });
 
-  /* ───────────────────────── 6. CORE SEND LOGIC ───────────────── */
+  /* ───────────────────────── 8. CORE SEND LOGIC ───────────────── */
 
   async function sendMessage(){
     const msg = textarea.value.trim();
@@ -530,9 +607,7 @@
               const data=JSON.parse(ev.split('\n')[1].slice(6));
               if(data.prev_id){
                 prevID=data.prev_id;
-                if(useHistory){
-                  localStorage.setItem('aiw-prevID',prevID);
-                }
+                if(useHistory){ localStorage.setItem('aiw-prevID',prevID); }
               }
               continue;
             }
@@ -541,7 +616,7 @@
               .filter(l=>l.startsWith('data:'))
               .map(l=>l.slice(6))
               .join('\n');
-            if(chunk) push(chunk);
+            if(chunk){ push(chunk); }
           }
         }
       } else {
@@ -564,16 +639,12 @@
         const lastIndex=chatHistory.length-1;
         if(lastIndex>=0 && chatHistory[lastIndex].role==='assistant'){
           chatHistory[lastIndex].content=safeResp;
-          if(useHistory){
-            localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
-          }
+          if(useHistory){ localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory)); }
         }
 
         if(j.prev_id){
           prevID=j.prev_id;
-          if(useHistory){
-            localStorage.setItem('aiw-prevID',prevID);
-          }
+          if(useHistory){ localStorage.setItem('aiw-prevID',prevID); }
         }
       }
 
@@ -590,9 +661,7 @@
       const lastIndex=chatHistory.length-1;
       if(lastIndex>=0 && chatHistory[lastIndex].role==='assistant'){
         chatHistory[lastIndex].content='Error contacting server';
-        if(useHistory){
-          localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
-        }
+        if(useHistory){ localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory)); }
       }
 
     }finally{
@@ -615,20 +684,14 @@
     }
   }
 
-  /* ───────────────────────── 7. INITIAL SETUP ──────────────────── */
+  /* ───────────────────────── 9. INITIAL SETUP ─────────────────── */
 
-  // If chatHistory is empty, add default welcome messages
-  if(chatHistory.length===0){
-    addDefaultMessages();
-  } else {
-    restoreHistory();
-  }
+  if(chatHistory.length===0){ addDefaultMessages(); } else { restoreHistory(); }
 
-  // Auto-open chat after 10s if not opened manually
+  // Auto-open chat after 10 s if not opened manually
   setTimeout(()=>{
     const isOpen=(box.style.display==='flex');
     if(!isOpen && !userOpenedChat){
-      // Show chat in compact mode + "pop" animation
       box.style.display='flex';
       setCompact();
       box.classList.add('aiw-auto-open');
@@ -637,9 +700,7 @@
 
   // Remove "pop" animation class after it finishes
   box.addEventListener('animationend', e=>{
-    if(e.animationName==='aiwBoxPop'){
-      box.classList.remove('aiw-auto-open');
-    }
+    if(e.animationName==='aiwBoxPop'){ box.classList.remove('aiw-auto-open'); }
   });
 
 })();

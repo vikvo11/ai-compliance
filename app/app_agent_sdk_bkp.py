@@ -1,8 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 # Flask + SQLAlchemy + OpenAI Responses API (stream + tool-calling, strict mode)
-# Multi-agent via HTTP: tools are discovered automatically from each FastMCP
-# server’s /schema.  No nested “LLM-inside-LLM”.
+# Added: OpenAI Agents (MCP) integration
 # All comments are in English (per user preference).
 
 from __future__ import annotations
@@ -17,15 +16,35 @@ import threading
 import asyncio
 import functools
 import logging
-from threading import Lock                     # NEW
 from collections.abc import Generator
-from typing import Any, Callable
+from typing import Any
+
+# ────────────────── AGENTS: additional imports ───────────────
+try:
+    from agents import Agent, Runner
+    from agents.mcp import MCPServerStreamableHttp
+    from agents.model_settings import ModelSettings
+except ImportError:
+    raise RuntimeError(
+        "openai-agents not installed. Install it with:\n"
+        "   pip install openai-agents>=0.3.0"
+    )
+# ─────────────────────────────────────────────────────────────
+
+from cors import register_cors
 
 import httpx
 import pandas as pd
 import configparser
-import openai
+import openai                          # ← single top-level import is enough
 from openai import OpenAI
+
+# ---------- universal alias for “invalid request” exception ----------
+try:                                   # openai-python 0.* branch
+    from openai.error import InvalidRequestError as _InvalidRequest
+except ImportError:                    # openai-python ≥1.0
+    from openai import BadRequestError as _InvalidRequest
+# ---------------------------------------------------------------------
 
 from flask import (
     Flask, render_template, request, redirect, flash,
@@ -33,8 +52,6 @@ from flask import (
     stream_with_context,
 )
 from flask_sqlalchemy import SQLAlchemy
-
-from cors import register_cors
 
 # ───────────────────────── 0. LOGGING ─────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -46,56 +63,40 @@ logging.basicConfig(
 )
 log = logging.getLogger("app")
 
-# ---------- universal alias for “invalid request” exception ----------
-try:                                   # openai-python 0.* branch
-    from openai.error import InvalidRequestError as _InvalidRequest
-except ImportError:                    # openai-python ≥1.0
-    from openai import BadRequestError as _InvalidRequest
-# ---------------------------------------------------------------------
-
 # ──────────────────────── 1. OPENAI CLIENT ───────────────────
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
 OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-DEFAULT_MODEL  = cfg.get("DEFAULT", "model",         fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-
+MODEL          = cfg.get("DEFAULT", "model",         fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
 if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
 
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 
-# The model may change at runtime via /config
-MODEL: str = DEFAULT_MODEL                              # guarded by CONFIG_LOCK
-AVAILABLE_MODELS = [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano"
-,
-]
+# ──────────── AGENTS: configuration variables ───────────────
+AGENT_MODEL     = cfg.get("DEFAULT", "agent_model", fallback=os.getenv("OPENAI_AGENT_MODEL", MODEL))
+AGENT_MAX_TURNS = int(cfg.get("DEFAULT", "agent_max_turns", fallback=os.getenv("AGENT_MAX_TURNS", "6")))
+os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────── 1a. GLOBAL CONFIG (MODEL & INSTRUCTIONS) ───────────────
+MCP_SERVER_URL = cfg.get("DEFAULT", "MCP_SERVER_URL", fallback=os.getenv("MCP_SERVER_URL"))
+
+# ----- propagate FCC key to environment ----------------------
+FCC_KEY = cfg.get("DEFAULT", "FCC_API_KEY", fallback=os.getenv("FCC_API_KEY"))
+if FCC_KEY:
+    os.environ["FCC_API_KEY"] = FCC_KEY
+# -------------------------------------------------------------
+import fcc_ecfs  # noqa: E402  (depends on env var)
+
+# ──────────────────── instructions for Responses API ─────────
 try:
     with open("responcess_api_instructions.cfg", "r", encoding="utf-8") as f:
-        INSTRUCTIONS: str = f.read().strip()
+        INSTRUCTIONS = f.read().strip()
 except OSError as exc:
     log.warning("Failed to load instructions.cfg: %s", exc)
     INSTRUCTIONS = ""
-
-CONFIG_LOCK = Lock()   # protects MODEL and INSTRUCTIONS
-
-# ─────────────────── 1b. AGENT / MCP REGISTRY ───────────────────
-AGENTS: dict[str, str] = {
-    "telco": cfg.get("DEFAULT", "MCP_SERVER_URL", fallback=os.getenv("MCP_SERVER_URL", "")).rstrip("/"),
-    # You can append more: "finance": "http://finance-mcp:8001"
-}
-if not AGENTS["telco"]:
-    log.error("MCP_SERVER_URL missing — Telco tools will be unavailable")
-
-HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
 
 # ──────────────────────── 2. FLASK & DATABASE ────────────────
 app = Flask(__name__)
@@ -114,45 +115,9 @@ register_cors(app)
 # class Client(db.Model): ...
 # class Invoice(db.Model): ...
 
-# ───────────────────────── 2a. /config ENDPOINT ─────────────────────────
-@app.route("/config", methods=["GET", "POST", "OPTIONS"])
-def config_endpoint():
-    """
-    GET  → return current MODEL and INSTRUCTIONS.
-    POST → JSON body { "model": "<model>", "instructions": "<text>" }
-            • any key may be omitted (partial update)
-            • validates the model against AVAILABLE_MODELS
-    """
-    global MODEL, INSTRUCTIONS 
-
-    if request.method == "GET":
-        with CONFIG_LOCK:
-            return jsonify({
-                "model": MODEL,
-                "instructions": INSTRUCTIONS,
-                "available_models": AVAILABLE_MODELS,
-            })
-
-    data = request.get_json(force=True, silent=True) or {}
-    new_model        = data.get("model")
-    new_instructions = data.get("instructions")
-
-    with CONFIG_LOCK:
-        if new_model:
-            if new_model not in AVAILABLE_MODELS:
-                return jsonify({"error": f"Model '{new_model}' not allowed"}), 400
-            # global MODEL
-            MODEL = new_model
-            log.info("MODEL changed at runtime to %s", MODEL)
-
-        if isinstance(new_instructions, str):
-            # global INSTRUCTIONS
-            INSTRUCTIONS = new_instructions
-            log.info("INSTRUCTIONS updated (length=%d chars)", len(INSTRUCTIONS))
-
-        return jsonify({"ok": True, "model": MODEL, "instructions": INSTRUCTIONS})
-
 # ─────────────────────── 3. LOCAL TOOL FUNCTIONS ─────────────
+HTTP_TIMEOUT = httpx.Timeout(6.0, connect=4.0, read=6.0)
+
 @functools.lru_cache(maxsize=1_024)
 def _coords_for(city: str) -> tuple[float, float] | None:
     """Return (lat, lon) for a given city or None if not found."""
@@ -218,74 +183,17 @@ def get_invoice_by_id(invoice_id: str) -> dict:
         }
     )
 
-# ───────────────── 3a. GENERIC MCP FUNCTION ──────────────────
-def _run_mcp_generic(agent: str, base_url: str, tool_name: str, **payload) -> dict | str:
-    """
-    Call FastMCP tool <tool_name> via JSON-RPC.
+# ───────────── FCC wrappers (use fcc_ecfs module) ────────────
+def fcc_search_filings(company: str) -> list[dict]:
+    """Return numbered list of PDFs for company."""
+    return fcc_ecfs.search(company)
 
-    • POST <base>/mcp/  (added automatically if missing).
-    • RPC method : "tools/call"
-    • Params     : {"name": <tool_name>, "arguments": <payload>}
-    • follow_redirects=True  — handles 307/308 to /mcp/.
-    • Accept      : JSON and text/event-stream.
-    • Returns r.json()["result"] (if present) or r.text.
-    """
-    root = base_url.rstrip("/")
-    url  = (root if root.endswith("/mcp") else root + "/mcp").rstrip("/") + "/"
+def fcc_get_filings_text(company: str, indexes: list[int]) -> dict:
+    """Download and parse the selected FCC PDFs without saving them."""
+    return fcc_ecfs.get_texts(company, indexes)
 
-    rpc_payload = {
-        "jsonrpc": "2.0",
-        "id": int(time.time() * 1000) % 1_000_000,   # simple unique id
-        "method": "tools/call",
-        "params": {
-            "name":      tool_name,
-            "arguments": payload or {},
-        },
-    }
-
-    headers = {
-        "Accept":        "application/json, text/event-stream",
-        "Content-Type":  "application/json",
-    }
-
-    try:
-        r = httpx.post(
-            url,
-            json=rpc_payload,
-            headers=headers,
-            timeout=httpx.Timeout(20.0, connect=4.0, read=20.0),
-            follow_redirects=True,
-        )
-        r.raise_for_status()
-    except httpx.HTTPError as exc:
-        log.error("MCP %s.%s failed: %s", agent, tool_name, exc)
-        return f"MCP error ({agent}.{tool_name}): {exc}"
-
-    ctype = r.headers.get("content-type", "")
-    if "json" in ctype:
-        try:
-            obj = r.json()
-        except ValueError:
-            return r.text
-        # JSON-RPC: result | error
-        if isinstance(obj, dict):
-            if "result" in obj:
-                return obj["result"]
-            if "error" in obj:
-                return f"MCP error ({agent}.{tool_name}): {obj['error']}"
-        return obj
-    # text/event-stream or something else – return as is
-    return r.text
-
-
-
-# ───────────────── instructions for Responses API ────────────
-# (INSTRUCTIONS loaded earlier and is mutable via /config)
-
-# ───────────────────────── 4. TOOL SCHEMA ────────────────────
-# 4a — local tools (hard-coded)
-TOOLS: list[dict] = [
-    {"type": "web_search"},
+# ───────────────────────── 3a. TOOL SCHEMA ───────────────────
+TOOLS = [
     {
         "type": "function",
         "name": "get_current_weather",
@@ -320,123 +228,69 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "ask_mcp_agent",
+        "description": "Delegate the user's request to an external MCP-powered agent.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Full user question"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
-# 4b — DISPATCH MAP (starts with local functions)
-DISPATCH: dict[str, Callable[..., Any]] = {
+DISPATCH = {
     "get_current_weather": get_current_weather,
     "get_invoice_by_id":   get_invoice_by_id,
+    "ask_mcp_agent":       lambda query: _run_agent(query),
 }
 
-# 4c — dynamic discovery of agent tools
-def _register_agent(agent_name: str, base_url: str) -> None:
-    """
-    Discover tools from a FastMCP server via JSON-RPC and register them
-    so that the OpenAI Responses API can call them.
-    (Full implementation unchanged from previous version.)
-    """
-    url = f"{base_url.rstrip('/')}/mcp/"
-    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-
-    try:
-        r = httpx.post(
-            url,
-            json=payload,
-            headers={"Accept": "application/json, text/event-stream"},
-            timeout=HTTP_TIMEOUT,
-            follow_redirects=True,
-        )
-        r.raise_for_status()
-        rpc = r.json()
-    except httpx.HTTPError as exc:
-        log.error("Cannot fetch tools list from %s: %s", url, exc)
-        return
-    except ValueError as exc:
-        log.error("Bad JSON from %s: %s", url, exc)
-        return
-
-    # ── extract tools list ───────────────────────────────────────
-    result = rpc.get("result", {})
-    if isinstance(result, dict) and "tools" in result:
-        tools = result["tools"]
-    elif isinstance(result, list):
-        tools = result
-    else:
-        log.error("Cannot parse tools list from %s: %s", url, rpc)
-        return
-
-    # helper to strict-ify schema recursively
-    def _strictify(node: dict) -> dict:
-        if not isinstance(node, dict):
-            return node
-        node = {k: _strictify(v) if isinstance(v, dict) else v
-                for k, v in node.items()}
-
-        for key in ("anyOf", "oneOf", "allOf"):
-            if key in node and isinstance(node[key], list):
-                node[key] = [_strictify(s) for s in node[key]]
-        if "items" in node and isinstance(node["items"], dict):
-            node["items"] = _strictify(node["items"])
-
-        if node.get("type") == "object":
-            node.setdefault("properties", {})
-            node["additionalProperties"] = False
-            node["properties"] = {p: _strictify(s)
-                                  for p, s in node["properties"].items()}
-            node["required"] = sorted(node["properties"].keys())
-        return node
-
-    for raw in tools:
-        tname = raw.get("name")
-        if not tname:
-            continue
-        if tname in DISPATCH:
-            log.warning("Tool %s already registered, skipping", tname)
-            continue
-
-        origin_schema = raw.get("parameters") or raw.get("inputSchema") or {}
-        schema = _strictify(origin_schema)
-
-        if schema.get("type") != "object":
-            schema = {"type": "object", "properties": {}, "additionalProperties": False, "required": []}
-
-        spec = {
-            "type":        "function",
-            "name":        tname,
-            "description": raw.get("description", ""),
-            "strict":      True,
-            "parameters":  schema,
-        }
-
-        TOOLS.append(spec)
-        DISPATCH[tname] = functools.partial(
-            _run_mcp_generic,
-            agent=agent_name,
-            base_url=base_url,
-            tool_name=tname,
-        )
-        log.info("Registered tool %s from agent %s", tname, agent_name)
-
-    log.info("After %s: total tools = %d", agent_name, len(TOOLS))
-
-# ───────────────────────── 5. UTILITIES ──────────────────────
 @app.before_request
 def _log():
-    log.debug("HTTP %s %s", request.method, request.path)
+    print("MCP <--", request.method, request.path)
 
+# ──────────── AGENTS: helper wrappers ────────────────────────
+async def _run_agent_async(user_text: str, previous_response_id: str | None = None) -> str:
+    """Run the MCP agent asynchronously and return its final text output."""
+    async with MCPServerStreamableHttp(
+        name="External MCP Server",
+        params={"url": MCP_SERVER_URL.rstrip('/') + '/'},
+        client_session_timeout_seconds=25,
+    ) as mcp_server:
+        agent = Agent(
+            name="Assistant",
+            instructions="You are a helpful assistant. Use the MCP tools when appropriate.",
+            mcp_servers=[mcp_server],
+            model=AGENT_MODEL, #"gpt-4o-mini",
+            model_settings=ModelSettings(tool_choice="required"),
+        )
+        result = await Runner.run(
+            starting_agent=agent,
+            input=user_text,
+            previous_response_id=previous_response_id,
+            max_turns=AGENT_MAX_TURNS,
+        )
+        return result.final_output
+
+def _run_agent(user_text: str, previous_response_id: str | None = None) -> str:
+    """Synchronous wrapper around the async agent runner."""
+    return _run_sync(_run_agent_async(user_text, previous_response_id))
+
+# ─────────────────── 4. STREAM & TOOL HANDLING ───────────────
 def _run_tool(name: str, args: str) -> str:
-    """Execute a tool and return its result as str."""
+    """Execute a local tool and return its result as a string."""
     try:
         params = json.loads(args or "{}")
     except json.JSONDecodeError:
         return f"Bad JSON: {args}"
     fn = DISPATCH.get(name)
-    if not fn:
-        return f"Unknown tool {name}"
-    res = fn(**params)
-    return json.dumps(res) if isinstance(res, (dict, list)) else str(res)
-
-# ─────── Everything below is verbatim but now refers to global MODEL/INSTRUCTIONS ───────
+    res = fn(**params) if fn else f"Unknown tool {name}"
+    return json.dumps(res) if isinstance(res, dict) else str(res)
 
 def _finish_tool(
     response_id: str,
@@ -496,9 +350,10 @@ def _pipe(
                 early_text.clear()
                 meta_sent = True
 
-        if isinstance(delta, str) and "arguments" not in typ:
+        if isinstance(delta, str) and "arguments" not in typ:  # plain text token
             (q.put if meta_sent else early_text.append)(delta)
 
+        # legacy tool_calls
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 fn_name   = tc.function.name if getattr(tc, "function", None) else tc.name
@@ -510,6 +365,7 @@ def _pipe(
                         response_id, run_id, call_id, fn_name, full_args, q
                     )
 
+        # new schema
         if typ == "response.output_item.added":
             item = (
                 getattr(ev, "item", None)
@@ -529,11 +385,13 @@ def _pipe(
                 else:
                     buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
+        # accumulating chunks
         if "arguments.delta" in typ:
             iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
+        # end of args
         if typ.endswith("arguments.done"):
             iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
@@ -551,6 +409,7 @@ def _pipe(
     q.put(None)
     return response_id
 
+# ─────────────────── 5. SSE GENERATOR ────────────────────────
 def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
     """Convert queue events to SSE bytes."""
     keep_alive = time.time() + 20
@@ -579,41 +438,17 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
                 yield b": ping\n\n"
                 keep_alive = time.time() + 20
 
+# ─────── 6. HELPER THAT RESCUES BROKEN TOOL-CALL CHAINS ──────
 def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
-    """Same rescue logic as before (unchanged)."""
-    try:
+    """
+    Call OpenAI Responses.create; if API complains about a missing
+    function_call_output, automatically send a stub output and retry.
+    """
+    try:  # first attempt
         return client.responses.create(
             model=MODEL,
             input=msg,
             previous_response_id=last_resp_id,
-            instructions=INSTRUCTIONS,
-            tools=TOOLS,
-            tool_choice="auto",
-            parallel_tool_calls=False,
-            stream=True,
-        )
-    except _InvalidRequest as exc:
-        if "No tool output found" not in str(exc) or not last_resp_id:
-            raise
-        m = re.search(r"function call ([\w-]+)\.", str(exc))
-        missing_call_id = m.group(1) if m else None
-        if not missing_call_id:
-            raise
-        log.warning("Rescuing: sending stub output for call_id=%s", missing_call_id)
-        stub = client.responses.create(
-            model=MODEL,
-            input=[{
-                "type": "function_call_output",
-                "call_id": missing_call_id,
-                "output": "ERROR: tool interrupted (auto-generated stub)",
-            }],
-            previous_response_id=last_resp_id,
-            instructions=INSTRUCTIONS,
-        )
-        return client.responses.create(
-            model=MODEL,
-            input=msg,
-            previous_response_id=stub.id,
             instructions=INSTRUCTIONS,
             tools=TOOLS,
             tool_choice="auto",
@@ -621,6 +456,43 @@ def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
             stream=True,
         )
 
+    except _InvalidRequest as exc:
+        if "No tool output found" not in str(exc) or not last_resp_id:
+            raise  # not our case
+
+        # extract missing call_id
+        m = re.search(r"function call ([\w-]+)\.", str(exc))
+        missing_call_id = m.group(1) if m else None
+        if not missing_call_id:
+            raise
+
+        log.warning("Rescuing broken branch: sending stub output for call_id=%s", missing_call_id)
+
+        # send stub output
+        stub_resp = client.responses.create(
+            model=MODEL,
+            input=[{
+                "type":   "function_call_output",
+                "call_id": missing_call_id,
+                "output":  "ERROR: tool interrupted (auto-generated stub)",
+            }],
+            previous_response_id=last_resp_id,
+            instructions=INSTRUCTIONS,
+        )
+
+        # retry original request
+        return client.responses.create(
+            model=MODEL,
+            input=msg,
+            previous_response_id=stub_resp.id,
+            instructions=INSTRUCTIONS,
+            tools=TOOLS,
+            tool_choice="auto",
+            parallel_tool_calls=False,
+            stream=True,
+        )
+
+# ─────────────────────── 7. CHAT ENDPOINT ────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """SSE endpoint that streams assistant tokens + meta + done."""
@@ -655,7 +527,7 @@ def chat_stream():
         },
     )
 
-# ---------- CSV / CRUD ROUTES & EXPORT (unchanged) ----------
+# ───────────────── 8. CSV IMPORT / CRUD ROUTES ───────────────
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -695,6 +567,7 @@ def index():
         flash("Invoices uploaded successfully.")
         return redirect("/")
 
+    # return render_template("index.html", invoices=Invoice.query.all())
     return render_template("index.html", invoices='')
 
 @app.route("/edit/<int:invoice_id>", methods=["POST"])
@@ -748,13 +621,7 @@ def export_invoice(invoice_id: int | None = None):
         },
     )
 
-# ───────────────────────── 10. RUN APP ───────────────────────
+# ───────────────────────── 9. RUN APP ────────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
-    # Discover tools from all configured FastMCP servers
-    for agent_name, base_url in AGENTS.items():
-        if not base_url:
-            log.warning("Agent %s has no base_url → skipped", agent_name)
-            continue
-        _register_agent(agent_name, base_url)
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)

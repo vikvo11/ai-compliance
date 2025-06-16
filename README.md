@@ -92,3 +92,4 @@ curl -X GET "https://semantic-lookup-v2-821847034291.us-central1.run.app/documen
   -H "Connection: keep-alive"
 
   ### can u give me info about stir shaken and cpni for zultys?
+  ### Did Zultys report any CPNI incidents before?
