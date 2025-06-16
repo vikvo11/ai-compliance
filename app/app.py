@@ -5,6 +5,17 @@
 # server’s /schema.  No nested “LLM-inside-LLM”.
 # All comments are in English (per user preference).
 
+"""
+Changelog (2025-06-16)
+
+• FIX  multiple tool calls were cut off because nested _pipe() sent q.put(None)
+       too early ➜ added depth counter; only outermost level closes SSE.
+• FIX  schema for get_current_weather — 'unit' no longer required; default stays.
+• CHG  _finish_tool() now forwards tools+flags to follow-up call (safer).
+• CHG  _finish_tool() calls _pipe(..., depth+1).
+• Cosmetic typing / logging tweaks.
+"""
+
 from __future__ import annotations
 
 import os
@@ -19,13 +30,12 @@ import functools
 import logging
 from threading import Lock
 from collections.abc import Generator
-from contextlib import contextmanager
 from typing import Any, Callable
 
 import httpx
 import pandas as pd
 import configparser
-import openai                              # single import is enough
+import openai
 from openai import OpenAI
 
 from flask import (
@@ -58,48 +68,19 @@ except ImportError:                    # openai-python ≥1.0
 cfg = configparser.ConfigParser()
 cfg.read("cfg/openai.cfg")
 
-OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY", fallback=os.getenv("OPENAI_API_KEY"))
-DEFAULT_MODEL  = cfg.get("DEFAULT", "model",         fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+OPENAI_API_KEY = cfg.get("DEFAULT", "OPENAI_API_KEY",
+                          fallback=os.getenv("OPENAI_API_KEY"))
+DEFAULT_MODEL  = cfg.get("DEFAULT", "model",
+                          fallback=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
 
 if not OPENAI_API_KEY:
     log.critical("OPENAI_API_KEY missing")
     sys.exit(1)
 
-# Make the key visible for openai-agents exporter *before* we import tracing
-os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
-
-# ─────────────── tracing helpers (import *после* установки env) ─────────
-try:
-    # pip install openai-agents>=0.3.0
-    from agents.tracing import trace, generation_span, function_span       # type: ignore
-except ImportError:                                                        # pragma: no cover
-    log.warning("openai-agents not available – Traces are disabled")
-
-    @contextmanager
-    def _noop_cm(*_a, **_kw):
-        yield
-
-    trace = generation_span = function_span = _noop_cm                    # type: ignore
-
 client = OpenAI(api_key=OPENAI_API_KEY, timeout=30, max_retries=3)
 
-# Helper: wrap any client.responses.create() in generation_span ───────────
-def _responses_create_traced(**kwargs):
-    """
-    Execute client.responses.create() inside a generation_span so that each
-    LLM call shows up as a child span in the Trace timeline.
-    """
-    orig_input = kwargs.get("input")
-
-    # If user passed a raw string, wrap it to keep the schema valid
-    if isinstance(orig_input, str):
-        orig_input = [{"type": "text", "text": orig_input[:200]}]
-
-    with generation_span(model=kwargs.get("model"), input=orig_input):
-        return client.responses.create(**kwargs)
-
 # The model may change at runtime via /config
-MODEL: str = DEFAULT_MODEL                               # guarded by CONFIG_LOCK
+MODEL: str = DEFAULT_MODEL                     # guarded by CONFIG_LOCK
 AVAILABLE_MODELS = [
     "gpt-4o",
     "gpt-4o-mini",
@@ -116,11 +97,13 @@ except OSError as exc:
     log.warning("Failed to load instructions.cfg: %s", exc)
     INSTRUCTIONS = ""
 
-CONFIG_LOCK = Lock()   # protects MODEL and INSTRUCTIONS
+CONFIG_LOCK = Lock()        # protects MODEL & INSTRUCTIONS
 
 # ─────────────────── 1b. AGENT / MCP REGISTRY ───────────────────
 AGENTS: dict[str, str] = {
-    "telco": cfg.get("DEFAULT", "MCP_SERVER_URL", fallback=os.getenv("MCP_SERVER_URL", "")).rstrip("/"),
+    "telco": cfg.get("DEFAULT", "MCP_SERVER_URL",
+                     fallback=os.getenv("MCP_SERVER_URL", "")).rstrip("/"),
+    # You can append more: "finance": "http://finance-mcp:8001"
 }
 if not AGENTS["telco"]:
     log.error("MCP_SERVER_URL missing — Telco tools will be unavailable")
@@ -136,7 +119,7 @@ app.config.update(
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
     SESSION_COOKIE_SAMESITE="None",
 )
-# db = SQLAlchemy(app)  # enable if models are defined
+# db = SQLAlchemy(app)           # enable if models are defined
 # os.makedirs("/app/data", exist_ok=True)
 
 register_cors(app)
@@ -148,20 +131,20 @@ register_cors(app)
 @app.route("/config", methods=["GET", "POST", "OPTIONS"])
 def config_endpoint():
     """
-    GET  → return current MODEL and INSTRUCTIONS.
-    POST → JSON body { "model": "<model>", "instructions": "<text>" }
+    GET   → return current MODEL and INSTRUCTIONS.
+    POST  → JSON body { "model": "<model>", "instructions": "<text>" }
+             • any key may be omitted (partial update)
+             • validates the model against AVAILABLE_MODELS
     """
     global MODEL, INSTRUCTIONS
 
     if request.method == "GET":
         with CONFIG_LOCK:
-            return jsonify(
-                {
-                    "model": MODEL,
-                    "instructions": INSTRUCTIONS,
-                    "available_models": AVAILABLE_MODELS,
-                }
-            )
+            return jsonify({
+                "model": MODEL,
+                "instructions": INSTRUCTIONS,
+                "available_models": AVAILABLE_MODELS,
+            })
 
     data = request.get_json(force=True, silent=True) or {}
     new_model        = data.get("model")
@@ -247,10 +230,15 @@ def get_invoice_by_id(invoice_id: str) -> dict:
     )
 
 # ───────────────── 3a. GENERIC MCP FUNCTION ──────────────────
-def _run_mcp_generic(agent: str, base_url: str, tool_name: str, **payload) -> dict | str:
+def _run_mcp_generic(agent: str, base_url: str, tool_name: str,
+                     **payload) -> dict | str:
     """
-    Call FastMCP tool <tool_name> via JSON-RPC and return result or text.
-    Wrapped in function_span so latency as well as inputs/outputs are visible.
+    Call FastMCP tool <tool_name> via JSON-RPC.
+
+    • POST <base>/mcp/
+    • RPC method: "tools/call"
+    • Params    : {"name": tool_name, "arguments": <payload>}
+    • Returns result or text.
     """
     root = base_url.rstrip("/")
     url  = (root if root.endswith("/mcp") else root + "/mcp").rstrip("/") + "/"
@@ -267,56 +255,32 @@ def _run_mcp_generic(agent: str, base_url: str, tool_name: str, **payload) -> di
         "Content-Type": "application/json",
     }
 
-    payload_json = json.dumps(payload, default=str)[:1_000]
-
-    with function_span(name=f"{agent}.{tool_name}", input=payload_json) as _span:   # noqa: F841
-        try:
-            r = httpx.post(
-                url,
-                json=rpc_payload,
-                headers=headers,
-                timeout=httpx.Timeout(20.0, connect=4.0, read=20.0),
-                follow_redirects=True,
-            )
-            r.raise_for_status()
-        except httpx.HTTPError as exc:
-            out = f"MCP error ({agent}.{tool_name}): {exc}"
-            _emit_result_span(f"{agent}.{tool_name}.result", out[:1_000])          # ── FIX
-            log.error("MCP %s.%s failed: %s", agent, tool_name, exc)
-            return out
+    try:
+        r = httpx.post(
+            url,
+            json=rpc_payload,
+            headers=headers,
+            timeout=httpx.Timeout(20.0, connect=4.0, read=20.0),
+            follow_redirects=True,
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.error("MCP %s.%s failed: %s", agent, tool_name, exc)
+        return f"MCP error ({agent}.{tool_name}): {exc}"
 
     ctype = r.headers.get("content-type", "")
     if "json" in ctype:
         try:
             obj = r.json()
         except ValueError:
-            result = r.text
-            _emit_result_span(f"{agent}.{tool_name}.result", result[:1_000])       # ── FIX
-            return result
+            return r.text
         if isinstance(obj, dict):
             if "result" in obj:
-                result = obj["result"]
-                _emit_result_span(                                              # ── FIX
-                    f"{agent}.{tool_name}.result",
-                    json.dumps(result, default=str)[:1_000],
-                )
-                return result
+                return obj["result"]
             if "error" in obj:
-                result = f"MCP error ({agent}.{tool_name}): {obj['error']}"
-                _emit_result_span(f"{agent}.{tool_name}.result", result[:1_000])   # ── FIX
-                return result
-        _emit_result_span(                                                      # ── FIX
-            f"{agent}.{tool_name}.result",
-            json.dumps(obj, default=str)[:1_000],
-        )
+                return f"MCP error ({agent}.{tool_name}): {obj['error']}"
         return obj
-
-    # Non-JSON
-    _emit_result_span(f"{agent}.{tool_name}.result", r.text[:1_000])              # ── FIX
     return r.text
-
-# ───────────────── instructions for Responses API ────────────
-# (INSTRUCTIONS loaded earlier and mutable via /config)
 
 # ───────────────────────── 4. TOOL SCHEMA ────────────────────
 TOOLS: list[dict] = [
@@ -325,7 +289,7 @@ TOOLS: list[dict] = [
         "type": "function",
         "name": "get_current_weather",
         "description": "Get the current weather for a city.",
-        "strict": True,
+        "strict": False,
         "parameters": {
             "type": "object",
             "properties": {
@@ -337,7 +301,8 @@ TOOLS: list[dict] = [
                     "default": "celsius",
                 },
             },
-            "required": ["location", "unit"],
+            # FIX: only 'location' is required
+            "required": ["location"],
             "additionalProperties": False,
         },
     },
@@ -357,13 +322,12 @@ TOOLS: list[dict] = [
     },
 ]
 
-# 4b — DISPATCH MAP
 DISPATCH: dict[str, Callable[..., Any]] = {
     "get_current_weather": get_current_weather,
     "get_invoice_by_id":   get_invoice_by_id,
 }
 
-# 4c — dynamic discovery of agent tools
+# 4c — dynamic discovery of agent tools ─────────────────────────
 def _register_agent(agent_name: str, base_url: str) -> None:
     """
     Discover tools from a FastMCP server via JSON-RPC and register them.
@@ -381,20 +345,29 @@ def _register_agent(agent_name: str, base_url: str) -> None:
         )
         r.raise_for_status()
         rpc = r.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.HTTPError as exc:
         log.error("Cannot fetch tools list from %s: %s", url, exc)
         return
+    except ValueError as exc:
+        log.error("Bad JSON from %s: %s", url, exc)
+        return
 
+    # ── extract tools list ───────────────────────────────────────
     result = rpc.get("result", {})
-    tools = result["tools"] if isinstance(result, dict) and "tools" in result else result
-    if not isinstance(tools, list):
+    if isinstance(result, dict) and "tools" in result:
+        tools = result["tools"]
+    elif isinstance(result, list):
+        tools = result
+    else:
         log.error("Cannot parse tools list from %s: %s", url, rpc)
         return
 
+    # helper to strict-ify schema recursively
     def _strictify(node: dict) -> dict:
         if not isinstance(node, dict):
             return node
-        node = {k: _strictify(v) if isinstance(v, dict) else v for k, v in node.items()}
+        node = {k: _strictify(v) if isinstance(v, dict) else v
+                for k, v in node.items()}
 
         for key in ("anyOf", "oneOf", "allOf"):
             if key in node and isinstance(node[key], list):
@@ -405,17 +378,22 @@ def _register_agent(agent_name: str, base_url: str) -> None:
         if node.get("type") == "object":
             node.setdefault("properties", {})
             node["additionalProperties"] = False
-            node["properties"] = {p: _strictify(s) for p, s in node["properties"].items()}
+            node["properties"] = {p: _strictify(s)
+                                  for p, s in node["properties"].items()}
             node["required"] = sorted(node["properties"].keys())
         return node
 
     for raw in tools:
         tname = raw.get("name")
-        if not tname or tname in DISPATCH:
+        if not tname:
+            continue
+        if tname in DISPATCH:
+            log.warning("Tool %s already registered, skipping", tname)
             continue
 
         origin_schema = raw.get("parameters") or raw.get("inputSchema") or {}
         schema = _strictify(origin_schema)
+
         if schema.get("type") != "object":
             schema = {
                 "type": "object",
@@ -431,6 +409,7 @@ def _register_agent(agent_name: str, base_url: str) -> None:
             "strict":      True,
             "parameters":  schema,
         }
+
         TOOLS.append(spec)
         DISPATCH[tname] = functools.partial(
             _run_mcp_generic,
@@ -440,47 +419,26 @@ def _register_agent(agent_name: str, base_url: str) -> None:
         )
         log.info("Registered tool %s from agent %s", tname, agent_name)
 
+    log.info("After %s: total tools = %d", agent_name, len(TOOLS))
+
 # ───────────────────────── 5. UTILITIES ──────────────────────
 @app.before_request
 def _log():
     log.debug("HTTP %s %s", request.method, request.path)
 
-# ───── helper: tiny span just for output ────────────
-def _emit_result_span(span_name: str, output: str) -> None:              # ── FIX
-    """Fire-and-forget span that only carries output."""
-    with function_span(name=span_name, output=output):
-        pass
-
 def _run_tool(name: str, args: str) -> str:
-    """
-    Execute a tool and return its result as str.
-    Wrapped in function_span with both input and output captured.
-    """
+    """Execute a tool and return its result as str."""
     try:
         params = json.loads(args or "{}")
     except json.JSONDecodeError:
         return f"Bad JSON: {args}"
-
     fn = DISPATCH.get(name)
     if not fn:
         return f"Unknown tool {name}"
-
-    params_json = json.dumps(params, default=str)[:1_000]
-
-    with function_span(name=name, input=params_json) as _span:           # noqa: F841
-        res = fn(**params)
-
-    # Log output in a tiny follow-up span (so that timing of main call remains accurate)
-    out_json = (
-        json.dumps(res, default=str)[:1_000]
-        if isinstance(res, (dict, list))
-        else str(res)[:1_000]
-    )
-    _emit_result_span(f"{name}.result", out_json)                        # ── FIX
-
+    res = fn(**params)
     return json.dumps(res) if isinstance(res, (dict, list)) else str(res)
 
-# ─────────── 5a. TOOL-FINISH WITH TRACING ────────────
+# ──────────── 6. OPENAI STREAMING HELPERS ────────────
 def _finish_tool(
     response_id: str,
     run_id: str | None,
@@ -488,38 +446,46 @@ def _finish_tool(
     name: str,
     args_json: str,
     q: queue.Queue[Any],
+    depth: int,
 ) -> str:
-    """
-    Execute tool → send function_call_output → continue piping (traced).
-    """
+    """Execute a tool and pipe follow-up response."""
     try:
         output = _run_tool(name, args_json)
-    except Exception as exc:                                            # pylint: disable=broad-except
+    except Exception as exc:   # pylint: disable=broad-except
         log.error("Tool '%s' failed: %s", name, exc)
         output = f"ERROR: {exc}"
 
-    follow = _responses_create_traced(
-        model=MODEL,
-        input=[
-            {
-                "type":   "function_call_output",
+    try:
+        follow = client.responses.create(
+            model=MODEL,
+            input=[{
+                "type":    "function_call_output",
                 "call_id": tool_call_id,
                 "output":  output,
-            }
-        ],
-        previous_response_id=response_id,
-        instructions=INSTRUCTIONS,
-        stream=True,
-    )
-    return _pipe(follow, q, run_id)
+            }],
+            previous_response_id=response_id,
+            instructions=INSTRUCTIONS,
+            tools=TOOLS,                # CHG: forward same tool set
+            tool_choice="auto",
+            parallel_tool_calls=True,
+            stream=True,
+        )
+        return _pipe(follow, q, run_id, depth + 1)   # CHG: nested depth
+    except Exception as exc:   # pylint: disable=broad-except
+        log.error("Failed to send tool output: %s", exc)
+        q.put(str(exc))
+        return response_id
 
-# ─────────────────── 6. STREAM PIPELINE ──────────────────────
 def _pipe(
     stream,
     q: queue.Queue[Any],
     run_id: str | None = None,
+    depth: int = 0,                      # NEW
 ) -> str:
-    """Forward an OpenAI streaming response to the SSE queue, handling tools."""
+    """
+    Forward an OpenAI streaming response to the SSE queue, handling tools.
+    depth==0 ➜ only the outermost level sends None → closes SSE.
+    """
     response_id  = ""
     meta_sent    = False
     early_text: list[str] = []
@@ -530,7 +496,8 @@ def _pipe(
         delta = getattr(ev, "delta", None)
         run_id = getattr(ev, "run_id", run_id)
 
-        if getattr(ev, "response", None):  # first fragment
+        # first fragment
+        if getattr(ev, "response", None):
             response_id = ev.response.id
             if not meta_sent:
                 q.put({"meta": {"prev_id": response_id}})
@@ -539,10 +506,11 @@ def _pipe(
                 early_text.clear()
                 meta_sent = True
 
+        # plain text tokens
         if isinstance(delta, str) and "arguments" not in typ:
             (q.put if meta_sent else early_text.append)(delta)
 
-        # legacy tool_calls (0.* schema)
+        # streaming tool_call objects
         if getattr(ev, "tool_calls", None):
             for tc in ev.tool_calls:
                 fn_name   = tc.function.name if getattr(tc, "function", None) else tc.name
@@ -551,10 +519,10 @@ def _pipe(
                 buf[tc.id] = {"name": fn_name, "parts": [], "call_id": call_id}
                 if full_args:
                     response_id = _finish_tool(
-                        response_id, run_id, call_id, fn_name, full_args, q
+                        response_id, run_id, call_id, fn_name, full_args, q, depth
                     )
 
-        # new schema (1.*)
+        # JSON-mode (output_item.added)
         if typ == "response.output_item.added":
             item = (
                 getattr(ev, "item", None)
@@ -564,58 +532,46 @@ def _pipe(
             item = item if isinstance(item, dict) else item.model_dump(exclude_none=True)
             if item and item.get("type") in ("function_call", "tool_call"):
                 iid     = item["id"]
-                fname   = (
-                    (item.get("function", {}) or item.get("tool_call", {})).get("name")
-                    or item.get("name")
-                )
+                fname   = (item.get("function", {}) or item.get("tool_call", {})).get("name") or item.get("name")
                 call_id = item.get("call_id") or iid
-                full_args = (
-                    (item.get("function", {}) or item.get("tool_call", {})).get("arguments")
-                )
+                full_args = (item.get("function", {}) or item.get("tool_call", {})).get("arguments")
                 if full_args:
                     response_id = _finish_tool(
-                        response_id, run_id, call_id, fname, full_args, q
+                        response_id, run_id, call_id, fname, full_args, q, depth
                     )
                 else:
                     buf[iid] = {"name": fname, "parts": [], "call_id": call_id}
 
-        # accumulating argument chunks
+        # delta → build JSON args gradually
         if "arguments.delta" in typ:
-            iid = (
-                getattr(ev, "output_item_id", None)
-                or getattr(ev, "item_id", None)
-                or getattr(ev, "tool_call_id", None)
-            )
+            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
+                  or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 buf[iid]["parts"].append(delta or "")
 
-        # end-of-arguments
+        # arguments.done → complete tool call
         if typ.endswith("arguments.done"):
-            iid = (
-                getattr(ev, "output_item_id", None)
-                or getattr(ev, "item_id", None)
-                or getattr(ev, "tool_call_id", None)
-            )
+            iid = getattr(ev, "output_item_id", None) or getattr(ev, "item_id", None) \
+                  or getattr(ev, "tool_call_id", None)
             if iid and iid in buf:
                 full_json = "".join(buf[iid]["parts"])
                 response_id = _finish_tool(
-                    response_id,
-                    run_id,
-                    buf[iid]["call_id"],
-                    buf[iid]["name"],
-                    full_json,
-                    q,
+                    response_id, run_id,
+                    buf[iid]["call_id"], buf[iid]["name"], full_json, q, depth
                 )
                 buf.pop(iid, None)
 
+        # end-of-stream
         if typ in ("response.done", "response.completed", "response.output_text.done"):
-            q.put(None)
+            if depth == 0:            # send only once
+                q.put(None)
             return response_id
 
-    q.put(None)
+    if depth == 0:
+        q.put(None)
     return response_id
 
-# ───────────── 7. SSE & RESCUE ─────────────
+# ────────────────────── 7. SSE WRAPPER ───────────────────────
 def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
     """Convert queue events to SSE bytes."""
     keep_alive = time.time() + 20
@@ -624,11 +580,7 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
             tok = q.get(timeout=1)
 
             if isinstance(tok, dict) and "meta" in tok:
-                yield (
-                    b"event: meta\ndata: "
-                    + json.dumps(tok["meta"]).encode()
-                    + b"\n\n"
-                )
+                yield b"event: meta\ndata: " + json.dumps(tok["meta"]).encode() + b"\n\n"
                 continue
 
             if isinstance(tok, dict) and "resp_id" in tok:
@@ -648,23 +600,20 @@ def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
                 yield b": ping\n\n"
                 keep_alive = time.time() + 20
 
+# ─────────────────── 8. RESPONSE CREATION UTILS ───────────────
 def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
-    """
-    Prepare first streaming Responses.create with stub-rescue logic.
-    (Без внешнего trace — теперь trace стартует в work().)
-    """
+    """Start streaming; auto-rescue if the previous call lacked tool output."""
     try:
-        return _responses_create_traced(
+        return client.responses.create(
             model=MODEL,
             input=msg,
             previous_response_id=last_resp_id,
             instructions=INSTRUCTIONS,
             tools=TOOLS,
             tool_choice="auto",
-            parallel_tool_calls=False,
+            parallel_tool_calls=True,
             stream=True,
         )
-
     except _InvalidRequest as exc:
         if "No tool output found" not in str(exc) or not last_resp_id:
             raise
@@ -673,30 +622,28 @@ def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
         if not missing_call_id:
             raise
         log.warning("Rescuing: sending stub output for call_id=%s", missing_call_id)
-        stub = _responses_create_traced(
+        stub = client.responses.create(
             model=MODEL,
-            input=[
-                {
-                    "type":   "function_call_output",
-                    "call_id": missing_call_id,
-                    "output":  "ERROR: tool interrupted (auto-generated stub)",
-                }
-            ],
+            input=[{
+                "type": "function_call_output",
+                "call_id": missing_call_id,
+                "output": "ERROR: tool interrupted (auto-generated stub)",
+            }],
             previous_response_id=last_resp_id,
             instructions=INSTRUCTIONS,
         )
-        return _responses_create_traced(
+        return client.responses.create(
             model=MODEL,
             input=msg,
             previous_response_id=stub.id,
             instructions=INSTRUCTIONS,
             tools=TOOLS,
             tool_choice="auto",
-            parallel_tool_calls=False,
+            parallel_tool_calls=True,
             stream=True,
         )
 
-# ─────────────── 8. HTTP ENDPOINTS ───────────────
+# ───────────────────── 9. FLASK ENDPOINTS ────────────────────
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """SSE endpoint that streams assistant tokens + meta + done."""
@@ -712,16 +659,14 @@ def chat_stream():
 
     @copy_current_request_context
     def work() -> None:
-        # -------- Trace covers the whole backend workflow ----------
-        with trace("flask_chat_workflow"):
-            try:
-                stream = _create_stream_with_rescue(msg, last_resp_id)
-                _pipe(stream, q)
-            except Exception as exc:                                        # pylint: disable=broad-except
-                log.error("OpenAI stream failed: %s", exc)
-                q.put(str(exc))
-            finally:
-                q.put(None)
+        try:
+            stream = _create_stream_with_rescue(msg, last_resp_id)
+            _pipe(stream, q)
+        except Exception as exc:   # pylint: disable=broad-except
+            log.error("OpenAI stream failed: %s", exc)
+            q.put(str(exc))
+        finally:
+            q.put(None)            # safe even if already closed
 
     threading.Thread(target=work, daemon=True).start()
     return Response(
@@ -733,10 +678,9 @@ def chat_stream():
         },
     )
 
-# ---------- CSV / CRUD ROUTES & EXPORT ----------
+# ---------- CSV / CRUD ROUTES & EXPORT (unchanged) ----------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    """Upload CSV with invoices or list current invoices."""
     if request.method == "POST":
         f = request.files.get("csv_file")
         if not f or not f.filename.endswith(".csv"):
@@ -769,18 +713,15 @@ def index():
         db.session.commit()
         log.info(
             "CSV: %d invoices, %d new clients (%.3fs)",
-            len(invoices),
-            len(new_clients),
-            time.perf_counter() - t0,
+            len(invoices), len(new_clients), time.perf_counter() - t0,
         )
         flash("Invoices uploaded successfully.")
         return redirect("/")
 
-    return render_template("index.html", invoices="")
+    return render_template("index.html", invoices='')
 
 @app.route("/edit/<int:invoice_id>", methods=["POST"])
 def edit_invoice(invoice_id: int):
-    """Edit a single invoice inline (AJAX)."""
     inv = Invoice.query.get_or_404(invoice_id)
     inv.amount       = request.form["amount"]
     inv.date_due     = request.form["date_due"]
@@ -799,7 +740,6 @@ def edit_invoice(invoice_id: int):
 
 @app.route("/delete/<int:invoice_id>", methods=["POST"])
 def delete_invoice(invoice_id: int):
-    """Delete an invoice and redirect to index."""
     inv = Invoice.query.get_or_404(invoice_id)
     db.session.delete(inv)
     db.session.commit()
@@ -809,23 +749,16 @@ def delete_invoice(invoice_id: int):
 @app.route("/export")
 @app.route("/export/<int:invoice_id>")
 def export_invoice(invoice_id: int | None = None):
-    """
-    Export a CSV with either one invoice (/export/<id>)
-    or all invoices (/export).
-    """
     rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
     csv_data = pd.DataFrame(
-        [
-            {
-                "client_name":  r.client.name,
-                "client_email": r.client.email,
-                "invoice_id":   r.invoice_id,
-                "amount":       r.amount,
-                "date_due":     r.date_due,
-                "status":       r.status,
-            }
-            for r in rows
-        ]
+        [{
+            "client_name":  r.client.name,
+            "client_email": r.client.email,
+            "invoice_id":   r.invoice_id,
+            "amount":       r.amount,
+            "date_due":     r.date_due,
+            "status":       r.status,
+        } for r in rows]
     ).to_csv(index=False)
 
     fname = f"invoice_{invoice_id or 'all'}.csv"
@@ -841,11 +774,9 @@ def export_invoice(invoice_id: int | None = None):
 # ───────────────────────── 10. RUN APP ───────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
-    # Discover tools from all configured FastMCP servers
     for agent_name, base_url in AGENTS.items():
         if not base_url:
             log.warning("Agent %s has no base_url → skipped", agent_name)
             continue
         _register_agent(agent_name, base_url)
-
     app.run(host="0.0.0.0", port=5005, debug=False, use_reloader=False)

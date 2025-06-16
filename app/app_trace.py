@@ -136,13 +136,11 @@ app.config.update(
     MAX_CONTENT_LENGTH=5 * 1024 * 1024,
     SESSION_COOKIE_SAMESITE="None",
 )
-# db = SQLAlchemy(app)  # enable if models are defined
-# os.makedirs("/app/data", exist_ok=True)
+
 
 register_cors(app)
 
-# class Client(db.Model): ...
-# class Invoice(db.Model): ...
+
 
 # ───────────────────────── 2a. /config ENDPOINT ─────────────────────────
 @app.route("/config", methods=["GET", "POST", "OPTIONS"])
@@ -509,6 +507,7 @@ def _finish_tool(
         ],
         previous_response_id=response_id,
         instructions=INSTRUCTIONS,
+        parallel_tool_calls=True,
         stream=True,
     )
     return _pipe(follow, q, run_id)
@@ -661,7 +660,7 @@ def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
             instructions=INSTRUCTIONS,
             tools=TOOLS,
             tool_choice="auto",
-            parallel_tool_calls=False,
+            parallel_tool_calls=True,
             stream=True,
         )
 
@@ -692,7 +691,7 @@ def _create_stream_with_rescue(msg: str, last_resp_id: str | None):
             instructions=INSTRUCTIONS,
             tools=TOOLS,
             tool_choice="auto",
-            parallel_tool_calls=False,
+            parallel_tool_calls=True,
             stream=True,
         )
 
@@ -732,7 +731,6 @@ def chat_stream():
             "Cache-Control": "no-cache, no-transform",
         },
     )
-
 # ---------- CSV / CRUD ROUTES & EXPORT ----------
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -777,67 +775,6 @@ def index():
         return redirect("/")
 
     return render_template("index.html", invoices="")
-
-@app.route("/edit/<int:invoice_id>", methods=["POST"])
-def edit_invoice(invoice_id: int):
-    """Edit a single invoice inline (AJAX)."""
-    inv = Invoice.query.get_or_404(invoice_id)
-    inv.amount       = request.form["amount"]
-    inv.date_due     = request.form["date_due"]
-    inv.status       = request.form["status"]
-    inv.client.email = request.form["client_email"]
-    db.session.commit()
-    return jsonify(
-        {
-            "client_name": inv.client.name,
-            "invoice_id":  inv.invoice_id,
-            "amount":      inv.amount,
-            "date_due":    inv.date_due,
-            "status":      inv.status,
-        }
-    )
-
-@app.route("/delete/<int:invoice_id>", methods=["POST"])
-def delete_invoice(invoice_id: int):
-    """Delete an invoice and redirect to index."""
-    inv = Invoice.query.get_or_404(invoice_id)
-    db.session.delete(inv)
-    db.session.commit()
-    flash("Invoice deleted.")
-    return redirect("/")
-
-@app.route("/export")
-@app.route("/export/<int:invoice_id>")
-def export_invoice(invoice_id: int | None = None):
-    """
-    Export a CSV with either one invoice (/export/<id>)
-    or all invoices (/export).
-    """
-    rows = [Invoice.query.get_or_404(invoice_id)] if invoice_id else Invoice.query.all()
-    csv_data = pd.DataFrame(
-        [
-            {
-                "client_name":  r.client.name,
-                "client_email": r.client.email,
-                "invoice_id":   r.invoice_id,
-                "amount":       r.amount,
-                "date_due":     r.date_due,
-                "status":       r.status,
-            }
-            for r in rows
-        ]
-    ).to_csv(index=False)
-
-    fname = f"invoice_{invoice_id or 'all'}.csv"
-    return (
-        csv_data,
-        200,
-        {
-            "Content-Type":        "text/csv",
-            "Content-Disposition": f'attachment; filename="{fname}"',
-        },
-    )
-
 # ───────────────────────── 10. RUN APP ───────────────────────
 if __name__ == "__main__":
     print("openai-python version:", openai.__version__)
