@@ -584,35 +584,43 @@ def _pipe(
 
 # ────────────────────── 7. SSE WRAPPER ───────────────────────
 def sse(q: queue.Queue[Any]) -> Generator[bytes, None, None]:
-    """Convert queue events to SSE bytes."""
+    """
+    Convert queue events to Server-Sent Events bytes.
+
+    Key point: **every newline inside a token becomes its own `data:` line**,
+    so the browser receives the exact original text including blank lines.
+    """
     keep_alive = time.time() + 20
     while True:
         try:
             tok = q.get(timeout=1)
 
+            # ----- structured events (meta / debug / done) -----------------
             if isinstance(tok, dict) and "meta" in tok:
                 yield b"event: meta\ndata: " + json.dumps(tok["meta"]).encode() + b"\n\n"
                 continue
-
             if isinstance(tok, dict) and "debug" in tok:
                 yield b"event: debug\ndata: " + json.dumps(tok["debug"]).encode() + b"\n\n"
                 continue
-
             if isinstance(tok, dict) and "resp_id" in tok:
                 session["prev_response_id"] = tok["resp_id"]
                 session.modified = True
                 continue
-
             if tok is None:
                 yield b"event: done\ndata: [DONE]\n\n"
                 break
 
-            yield f"data: {tok}\n\n".encode()
+            # ----- NEW: text chunk – preserve *all* \n ----------------------
+            for line in str(tok).split("\n"):
+                # even an empty line (“”) must be sent as separate data field
+                yield b"data: " + line.encode() + b"\n"
+            yield b"\n"                      # blank line terminates the event
+
             keep_alive = time.time() + 20
 
         except queue.Empty:
             if time.time() > keep_alive:
-                yield b": ping\n\n"
+                yield b": ping\n\n"         # comment to keep connection alive
                 keep_alive = time.time() + 20
 
 # ─────────────────── 8. RESPONSE CREATION UTILS ───────────────

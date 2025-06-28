@@ -1,10 +1,12 @@
 /* ============================================================================
-   AI Compliance Chat Widget – embeddable with runtime settings v2.9
+   AI Compliance Chat Widget – embeddable with runtime settings v2.10
+   (v2 .10 = v2 .9 + whitespace-preserving fixes)
+   All comments are in English (per user preference).
 ============================================================================ */
 (() => {
   'use strict';
 
-  // 1. CONFIG
+  // 1. CONFIG ──────────────────────────────────────────────────────────────
   const el         = document.currentScript;
   const BACKEND    = (el.dataset.backend || '').replace(/\/$/, '');
   const WIDGET_KEY = el.dataset.key || '';
@@ -19,13 +21,13 @@
   const COMPACT_W = 340, EXPANDED_W = 600, DEBUG_W = 320, COMPACT_H = 420;
 
   // Widget state
-  let isExpanded = false;
-  let chatBusy   = false;
-  let debugPanelOpen = false;
+  let isExpanded      = false;
+  let chatBusy        = false;
+  let debugPanelOpen  = false;
 
   // Settings toggles (persisted in localStorage)
-  let showChunkDebug   = (localStorage.getItem('aiw-show-chunks-debug') ?? 'true') === 'true';
-  let showToolResults  = (localStorage.getItem('aiw-show-tool-results') ?? 'true') === 'true';
+  let showChunkDebug  = (localStorage.getItem('aiw-show-chunks-debug') ?? 'true') === 'true';
+  let showToolResults = (localStorage.getItem('aiw-show-tool-results') ?? 'true') === 'true';
 
   // Request control
   let currentFetchController = null;
@@ -34,7 +36,7 @@
   // History settings
   const toggleStateStr = localStorage.getItem('aiw-toggle-history');
   let useHistory = (toggleStateStr === null) ? true : (toggleStateStr === 'true');
-  let prevID = useHistory ? localStorage.getItem('aiw-prevID') || null : null;
+  let prevID     = useHistory ? localStorage.getItem('aiw-prevID') || null : null;
 
   // Stored chat
   let chatHistory = [];
@@ -46,7 +48,7 @@
   // Track manual open
   let userOpenedChat = false;
 
-  // 2. STYLES
+  // 2. STYLES ───────────────────────────────────────────────────────────────
   const css = /* css */`
 :root{
   --aiw-primary:#2563eb;
@@ -98,7 +100,7 @@
   .aiw-box{right:12px; width:calc(100vw - 24px);}
 }
 .aiw-chat-main {
-  display: flex; flex-direction: column; flex: 1 1 0%;
+  display:flex; flex-direction:column; flex:1 1 0%;
   min-width:0; min-height:0;
 }
 .aiw-chat-main header{
@@ -157,14 +159,27 @@
   border:none; padding:.5rem 1rem; border-radius:8px; cursor:pointer; transition:background .2s;
 }
 .aiw-chat-main button.send:hover{background:var(--aiw-primary-dark);}
+
+/*────────────────────  Whitespace-preserving update  ────────────────────*/
 .aiw-chat-main .message{
   max-width:90%; padding:.75rem; border-radius:10px;
   line-height:1.45; font-size:14px;
+  white-space:pre-wrap;          /* MOD: keep \n, \t, double spaces            */
+  tab-size:4;                    /* MOD: visual width of a TAB character        */
+  word-break:break-word;         /* MOD: prevent overflow on long strings       */
 }
-.aiw-chat-main .message.user{background:var(--aiw-user-bg); color:var(--aiw-user-text); margin-left:auto;}
-.aiw-chat-main .message.assistant{background:var(--aiw-assistant-bg); color:var(--aiw-assistant-text); margin-right:auto;}
+.aiw-chat-main .message.user      {background:var(--aiw-user-bg); color:var(--aiw-user-text); margin-left:auto;}
+.aiw-chat-main .message.assistant {background:var(--aiw-assistant-bg); color:var(--aiw-assistant-text); margin-right:auto;}
 .aiw-chat-main .message.legal-note{background:var(--aiw-user-bg); color:#6b7280; margin-right:auto; font-size:13px;}
 .aiw-chat-main .message.assistant.typing{opacity:0.8;}
+
+/* Monospace font for explicit code/pre blocks */
+.aiw-chat-main .message pre,
+.aiw-chat-main .message code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  white-space:pre-wrap;
+}
+
 .aiw-chat-main .typing::after{content:"."; animation:aiwDots 1.2s steps(3,end) infinite;}
 @keyframes aiwDots{0%{content:"."}33%{content:".."}66%{content:"..."}}
 .aiw-chat-main .quick-replies{
@@ -225,9 +240,9 @@
   flex:1; margin:0; padding:.5rem .75rem; overflow-y:auto; white-space:pre-wrap;
 }
 .aiw-debug-panel button{background:none;border:none;color:inherit;cursor:pointer;}
-.aiw-box { flex-direction: row !important; }
-.aiw-debug-panel { order: 0; }
-.aiw-chat-main { order: 1; flex: 1 1 0%; display: flex; flex-direction: column; min-width:0; min-height:0;}
+.aiw-box {flex-direction:row !important;}
+.aiw-debug-panel {order:0;}
+.aiw-chat-main   {order:1; flex:1 1 0%; display:flex; flex-direction:column; min-width:0; min-height:0;}
 @media(max-width:480px){
   .aiw-box{width:100vw;min-width:0;}
   .aiw-debug-panel{max-width:45vw;}
@@ -239,9 +254,10 @@
 }
 `;
 
+  // Inject runtime CSS
   document.head.appendChild(Object.assign(document.createElement('style'), {textContent: css}));
 
-  // 3. DOM CREATION
+  // 3. DOM CREATION ─────────────────────────────────────────────────────────
   const launcher = Object.assign(document.createElement('button'),{
     className:'aiw-launcher', title:'Chat', 'aria-label':'Open chat widget', textContent:'💬'
   });
@@ -319,57 +335,57 @@
 </div>`;
   document.body.appendChild(modal);
 
-  // 4. REFERENCES
-  const toggleBtn      = chatMain.querySelector('.toggle');
-  const settingsBtn    = chatMain.querySelector('.settings');
-  const historyToggle  = chatMain.querySelector('.toggle-history input');
-  const resetChatBtn   = chatMain.querySelector('.reset-chat');
-  const messages       = chatMain.querySelector('.messages');
-  const textarea       = chatMain.querySelector('textarea');
-  const sendBtn        = chatMain.querySelector('.send');
+  // 4. REFERENCES (DOM nodes) ───────────────────────────────────────────────
+  const toggleBtn        = chatMain.querySelector('.toggle');
+  const settingsBtn      = chatMain.querySelector('.settings');
+  const historyToggle    = chatMain.querySelector('.toggle-history input');
+  const resetChatBtn     = chatMain.querySelector('.reset-chat');
+  const messages         = chatMain.querySelector('.messages');
+  const textarea         = chatMain.querySelector('textarea');
+  const sendBtn          = chatMain.querySelector('.send');
 
   // Debug refs
-  const dbgClose  = debugPanel.querySelector('.close');
-  const dbgClear  = debugPanel.querySelector('.clear');
-  const dbgOutput = debugPanel.querySelector('pre');
+  const dbgClose         = debugPanel.querySelector('.close');
+  const dbgClear         = debugPanel.querySelector('.clear');
+  const dbgOutput        = debugPanel.querySelector('pre');
 
   // Modal refs
-  const modalForm         = modal.querySelector('form');
-  const modelSelect       = modal.querySelector('select[name=model]');
-  const instrTextarea     = modal.querySelector('textarea[name=instructions]');
-  const showDebugInput    = modal.querySelector('input[name=showdebug]');
-  const showChunksInput   = modal.querySelector('input[name=showchunks]');
+  const modalForm        = modal.querySelector('form');
+  const modelSelect      = modal.querySelector('select[name=model]');
+  const instrTextarea    = modal.querySelector('textarea[name=instructions]');
+  const showDebugInput   = modal.querySelector('input[name=showdebug]');
+  const showChunksInput  = modal.querySelector('input[name=showchunks]');
   const showToolResultsInput = modal.querySelector('input[name=showtoolresults]');
-  const modalCancelBtn    = modal.querySelector('.cancel');
+  const modalCancelBtn   = modal.querySelector('.cancel');
 
-  // 5. DEBUG UTILITIES
+  // 5. DEBUG UTILITIES ──────────────────────────────────────────────────────
   const debugLog = [];
   const MAX_LOG  = 200;
 
-  // Add entry to debug log, always show tool/function results, respect chunk toggle for plain chunks
+  function looksLikeToolPayload(txt){
+    if(!txt) return false;
+    try{
+      const obj = JSON.parse(txt);
+      return obj && typeof obj === 'object' && ('tool' in obj || 'output' in obj);
+    }catch{ return false; }
+  }
+
+  // Add entry to debug log with filtering rules
   function addDebug(direction, payload){
-    // Always log errors and meta
+    // Always log errors / meta / full responses
     if (direction.startsWith('!') || direction === '→ request' || direction === '← response' || direction === '← meta') {
-      doLog();
-      return;
+      doLog(); return;
     }
-    // Always log tool/function call results (payload is JSON with .tool or .output)
-    if (direction === '← chunk' && looksLikeToolPayload(payload)) {
-      doLog();
-      return;
-    }
-    // For plain chunks, respect the chunk debug toggle
-    if (direction === '← chunk') {
-      if (showChunkDebug) doLog();
-      return;
-    }
-    // Default: log everything else
+    // Always log tool/function results
+    if (direction === '← chunk' && looksLikeToolPayload(payload)) { doLog(); return; }
+    // For plain chunks obey toggle
+    if (direction === '← chunk') { if (showChunkDebug) doLog(); return; }
     doLog();
 
-    function doLog() {
+    function doLog(){
       const ts = new Date().toISOString().split('T')[1].split('Z')[0];
       debugLog.push(`[${ts}] ${direction}: ${payload}`);
-      if(debugLog.length>MAX_LOG) debugLog.shift();
+      if(debugLog.length > MAX_LOG) debugLog.shift();
       if(debugPanel.classList.contains('open')){
         dbgOutput.textContent = debugLog.join('\n');
         dbgOutput.scrollTop   = dbgOutput.scrollHeight;
@@ -377,48 +393,45 @@
     }
   }
 
-  // Check if text is a tool/function result (JSON with .tool/.output)
-  function looksLikeToolPayload(txt){
-    if(!txt) return false;
-    try{
-      const obj = JSON.parse(txt);
-      return obj && typeof obj==='object' && ('tool' in obj || 'output' in obj);
-    }catch{ return false; }
-  }
-
-  // 6. SETTINGS LOGIC
+  // 6. SETTINGS LOGIC (modal) ───────────────────────────────────────────────
   async function openSettings(){
     try{
-      const res=await fetch(`${BACKEND}/config`,{method:'GET',mode:'cors'});
+      const res = await fetch(`${BACKEND}/config`, {method:'GET', mode:'cors'});
       if(!res.ok) throw new Error('Cannot fetch /config');
-      const cfg=await res.json();
+      const cfg = await res.json();
 
-      const defaultModels=['gpt-4o-mini','gpt-4o','gpt-4o-turbo','gpt-4-turbo','gpt-3.5-turbo-0125'];
-      const models=(cfg.available_models||defaultModels).concat(cfg.model||[])
-                   .filter((v,i,a)=>a.indexOf(v)===i);
+      const defaultModels = ['gpt-4o-mini','gpt-4o','gpt-4o-turbo','gpt-4-turbo','gpt-3.5-turbo-0125'];
+      const models = (cfg.available_models || defaultModels)
+        .concat(cfg.model || [])
+        .filter((v,i,a)=>a.indexOf(v)===i);
 
-      modelSelect.innerHTML=models.map(m=>`<option value="${m}" ${m===cfg.model?'selected':''}>${m}</option>`).join('');
-      instrTextarea.value = cfg.instructions || '';
-      showDebugInput.checked    = debugPanelOpen;
-      showChunksInput.checked   = showChunkDebug;
-      showToolResultsInput.checked = showToolResults;
+      modelSelect.innerHTML = models
+        .map(m=>`<option value="${m}" ${m===cfg.model?'selected':''}>${m}</option>`)
+        .join('');
+      instrTextarea.value           = cfg.instructions || '';
+      showDebugInput.checked        = debugPanelOpen;
+      showChunksInput.checked       = showChunkDebug;
+      showToolResultsInput.checked  = showToolResults;
       modal.classList.add('open');
     }catch(err){
-      console.error('[aiw] settings:',err);
+      console.error('[aiw] settings:', err);
       alert('Error loading settings');
     }
   }
+
   async function saveSettings(e){
     e.preventDefault();
     try{
-      // Save backend model/settings
-      const res=await fetch(`${BACKEND}/config`,{
-        method:'POST',mode:'cors',
+      const res = await fetch(`${BACKEND}/config`, {
+        method:'POST', mode:'cors',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:modelSelect.value.trim(),instructions:instrTextarea.value.trim()})
+        body:JSON.stringify({
+          model:modelSelect.value.trim(),
+          instructions:instrTextarea.value.trim(),
+        }),
       });
-      const j=await res.json();
-      if(!res.ok||j.error) throw new Error(j.error||'Save failed');
+      const j = await res.json();
+      if(!res.ok || j.error) throw new Error(j.error || 'Save failed');
       setDebugPanel(showDebugInput.checked);
       showChunkDebug  = showChunksInput.checked;
       showToolResults = showToolResultsInput.checked;
@@ -426,12 +439,12 @@
       localStorage.setItem('aiw-show-tool-results', showToolResults ? 'true' : 'false');
       modal.classList.remove('open');
     }catch(err){
-      console.error('[aiw] save settings:',err);
-      alert(err.message||'Cannot save settings');
+      console.error('[aiw] save settings:', err);
+      alert(err.message || 'Cannot save settings');
     }
   }
 
-  // Show/hide debug panel and resize chat
+  // Show / hide debug panel and resize chat box
   function setDebugPanel(show){
     debugPanelOpen = show;
     if(show){
@@ -445,7 +458,7 @@
     }
   }
 
-  // 7. HELPER FUNCTIONS
+  // 7. HELPER FUNCTIONS ────────────────────────────────────────────────────
   const sanitize = s => s.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi,'');
 
   function addDefaultMessages(){
@@ -463,214 +476,276 @@
       'legal-note'
     );
   }
-  function addMsg(raw, cls){
-    const div=document.createElement('div');
-    div.className=`message ${cls}`;
-    div.innerHTML=sanitize(raw);
-    messages.appendChild(div);
-    messages.scrollTop=messages.scrollHeight;
 
-    chatHistory.push({role:cls,content:div.innerHTML});
+  function addMsg(raw, cls){
+    const div = document.createElement('div');
+    div.className = `message ${cls}`;
+    div.innerHTML = sanitize(raw);
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+
+    chatHistory.push({role:cls, content:div.innerHTML});
     if(useHistory) localStorage.setItem('aiw-chat-history',JSON.stringify(chatHistory));
     return div;
   }
-  function startDots(el){el.classList.add('typing');}
-  function stopDots (el){el.classList.remove('typing');}
+
+  function startDots(el){ el.classList.add('typing'); }
+  function stopDots (el){ el.classList.remove('typing'); }
 
   function restoreHistory(){
     for(const m of chatHistory){
-      const d=document.createElement('div');
-      d.className=`message ${m.role}`;
-      d.innerHTML=m.content;
+      const d = document.createElement('div');
+      d.className = `message ${m.role}`;
+      d.innerHTML = m.content;
       messages.appendChild(d);
     }
-    messages.scrollTop=messages.scrollHeight;
+    messages.scrollTop = messages.scrollHeight;
   }
 
-  // 8. UI EVENTS
+  // 8. UI EVENTS ────────────────────────────────────────────────────────────
   function resizeBox(){
-    let baseWidth = isExpanded ? EXPANDED_W : COMPACT_W;
-    let totalWidth = baseWidth + (debugPanelOpen ? DEBUG_W : 0);
-    Object.assign(box.style,{width:`${totalWidth}px`,height:isExpanded?`80vh`:`${COMPACT_H}px`});
+    const baseWidth  = isExpanded ? EXPANDED_W : COMPACT_W;
+    const totalWidth = baseWidth + (debugPanelOpen ? DEBUG_W : 0);
+    Object.assign(box.style, {
+      width : `${totalWidth}px`,
+      height: isExpanded ? '80vh' : `${COMPACT_H}px`,
+    });
   }
-  function setCompact(){isExpanded=false;resizeBox();}
-  function setExpanded(){isExpanded=true;resizeBox();}
+  function setCompact (){ isExpanded = false; resizeBox(); }
+  function setExpanded(){ isExpanded = true;  resizeBox(); }
 
-  toggleBtn   .addEventListener('click',()=>{isExpanded?setCompact():setExpanded();});
-  settingsBtn .addEventListener('click',openSettings);
-  modalCancelBtn.addEventListener('click',()=>modal.classList.remove('open'));
-  modalForm  .addEventListener('submit',saveSettings);
+  toggleBtn        .addEventListener('click', () => { isExpanded ? setCompact() : setExpanded(); });
+  settingsBtn      .addEventListener('click', openSettings);
+  modalCancelBtn   .addEventListener('click', () => modal.classList.remove('open'));
+  modalForm        .addEventListener('submit', saveSettings);
 
-  launcher.addEventListener('click',()=>{
-    const open=box.style.display==='flex';
-    box.style.display=open?'none':'flex';
-    if(!open){setCompact();userOpenedChat=true;textarea.focus();}
+  launcher.addEventListener('click', () => {
+    const open = box.style.display === 'flex';
+    box.style.display = open ? 'none' : 'flex';
+    if(!open){
+      setCompact();
+      userOpenedChat = true;
+      textarea.focus();
+    }
   });
 
-  dbgClose.addEventListener('click',()=>setDebugPanel(false));
-  dbgClear.addEventListener('click',()=>{debugLog.length=0;dbgOutput.textContent='';});
+  dbgClose.addEventListener('click', () => setDebugPanel(false));
+  dbgClear.addEventListener('click', () => { debugLog.length = 0; dbgOutput.textContent = ''; });
 
-  resetChatBtn.addEventListener('click',()=>{
-    abortActiveRequest(); chatBusy=false; textarea.disabled=false; sendBtn.disabled=false;
-    messages.innerHTML=''; chatHistory=[]; if(useHistory) localStorage.removeItem('aiw-chat-history');
-    prevID=null; if(useHistory) localStorage.removeItem('aiw-prevID');
+  resetChatBtn.addEventListener('click', () => {
+    abortActiveRequest();
+    chatBusy = false;
+    textarea.disabled = false;
+    sendBtn .disabled = false;
+    messages.innerHTML = '';
+    chatHistory = [];
+    if(useHistory) localStorage.removeItem('aiw-chat-history');
+    prevID = null;
+    if(useHistory) localStorage.removeItem('aiw-prevID');
     addDefaultMessages();
   });
 
-  sendBtn.addEventListener('click',sendMessage);
-  textarea.addEventListener('keydown',e=>{
-    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}
-  });
-
-  messages.addEventListener('click',e=>{
-    const q=e.target.closest('.quick-replies button');
-    if(q){textarea.value="I’d like to talk about: "+q.textContent.trim();sendMessage();}
-    if(e.target.classList.contains('getInTouch')) window.location.href='mailto:contact@telecom-ai.com';
-  });
-
-  historyToggle.addEventListener('change',e=>{
-    useHistory=e.target.checked; localStorage.setItem('aiw-toggle-history',useHistory.toString());
-    if(!useHistory){
-      ['aiw-prevID','aiw-chat-history'].forEach(k=>localStorage.removeItem(k));
-    }else{
-      if(prevID) localStorage.setItem('aiw-prevID',prevID);
-      if(chatHistory.length) localStorage.setItem('aiw-chat-history',JSON.stringify(chatHistory));
+  sendBtn .addEventListener('click', sendMessage);
+  textarea.addEventListener('keydown', e=>{
+    if(e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      sendMessage();
     }
   });
 
-  // 9. CORE SEND LOGIC
+  messages.addEventListener('click', e=>{
+    const q = e.target.closest('.quick-replies button');
+    if(q){
+      textarea.value = 'I’d like to talk about: ' + q.textContent.trim();
+      sendMessage();
+    }
+    if(e.target.classList.contains('getInTouch')){
+      window.location.href = 'mailto:contact@telecom-ai.com';
+    }
+  });
+
+  historyToggle.addEventListener('change', e=>{
+    useHistory = e.target.checked;
+    localStorage.setItem('aiw-toggle-history', useHistory.toString());
+    if(!useHistory){
+      ['aiw-prevID','aiw-chat-history'].forEach(k=>localStorage.removeItem(k));
+    }else{
+      if(prevID) localStorage.setItem('aiw-prevID', prevID);
+      if(chatHistory.length) localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
+    }
+  });
+
+  // 9. CORE SEND LOGIC ──────────────────────────────────────────────────────
   async function sendMessage(){
-    const msg=textarea.value.trim();
-    if(!msg||chatBusy) return;
+    const msg = textarea.value.trim();
+    if(!msg || chatBusy) return;
 
-    abortActiveRequest(); chatBusy=true; textarea.value='';
-    addMsg(msg,'user');
-    const aiDiv=addMsg('','assistant'); startDots(aiDiv);
+    abortActiveRequest();
+    chatBusy   = true;
+    textarea.value = '';
 
-    currentFetchController=new AbortController();
-    const signal=currentFetchController.signal;
-    const headers={'Content-Type':'application/json','X-Widget-Key':WIDGET_KEY};
+    addMsg(msg, 'user');
+    const aiDiv = addMsg('', 'assistant');
+    startDots(aiDiv);
 
-    // Buffer for assistant response (only plain text chunks for chat window)
-    let assistantBuffer = '';
-    // Buffer for last tool result, if present
-    let lastToolResult = null;
+    currentFetchController = new AbortController();
+    const signal  = currentFetchController.signal;
+    const headers = {'Content-Type':'application/json','X-Widget-Key':WIDGET_KEY};
 
-    addDebug('→ request',JSON.stringify({message:msg,prevID}));
+    let assistantBuffer = '';   // text chunks
+    let lastToolResult  = null; // last tool payload (JSON)
+
+    addDebug('→ request', JSON.stringify({message:msg, prevID}));
 
     try{
       if(USE_STREAM){
-        const res=await fetch(`${BACKEND}/chat/stream`,{
-          method:'POST',mode:'cors',headers,
-          body:JSON.stringify({message:msg,previous_response_id:prevID}),signal
+        const res = await fetch(`${BACKEND}/chat/stream`, {
+          method:'POST', mode:'cors', headers,
+          body:JSON.stringify({message:msg, previous_response_id:prevID}),
+          signal,
         });
-        if(!res.ok||!res.body) throw new Error('Network error');
-        currentReader=res.body.getReader();
-        const dec=new TextDecoder(); let buf='';
+        if(!res.ok || !res.body) throw new Error('Network error');
+        currentReader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
 
         while(true){
-          const {value,done}=await currentReader.read();
+          const {value, done} = await currentReader.read();
           if(done) break;
-          buf+=dec.decode(value,{stream:true});
-          const evts=buf.split('\n\n'); buf=evts.pop();
+          buf += dec.decode(value,{stream:true});
+          const evts = buf.split('\n\n'); buf = evts.pop();
+
           for(const ev of evts){
-            if(ev.startsWith('event: done')){currentReader.cancel();break;}
+            if(ev.startsWith('event: done')){ currentReader.cancel(); break; }
+
             if(ev.startsWith('event: meta')){
-              const m=JSON.parse(ev.split('\n')[1].slice(6));
-              addDebug('← meta',JSON.stringify(m));
-              if(m.prev_id){prevID=m.prev_id;if(useHistory) localStorage.setItem('aiw-prevID',prevID);}
+              const m = JSON.parse(ev.split('\n')[1].slice(6));
+              addDebug('← meta', JSON.stringify(m));
+              if(m.prev_id){
+                prevID = m.prev_id;
+                if(useHistory) localStorage.setItem('aiw-prevID', prevID);
+              }
               continue;
             }
-            const chunk=ev.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(6)).join('\n');
+            const chunk = ev.split('\n')
+              .filter(l=>l.startsWith('data:'))
+              .map(l=>l.slice(6))
+              .join('\n');
             if(!chunk) continue;
-            addDebug('← chunk',chunk);
+            addDebug('← chunk', chunk);
+
+            // Tool payload?
             if(looksLikeToolPayload(chunk)){
               lastToolResult = chunk;
               continue;
             }
-            // Show only normal text chunks in assistant's chat message
-            if(aiDiv.classList.contains('typing')){stopDots(aiDiv);aiDiv.innerHTML='';}
+
+            // Normal text chunk → render
+            if(aiDiv.classList.contains('typing')){
+              stopDots(aiDiv);
+              aiDiv.innerHTML = '';
+            }
             assistantBuffer += chunk;
-            aiDiv.innerHTML = sanitize(assistantBuffer);
-            messages.scrollTop=messages.scrollHeight;
-            const i=chatHistory.length-1;
-            if(i>=0&&chatHistory[i].role==='assistant'){
-              chatHistory[i].content=aiDiv.innerHTML;
-              if(useHistory) localStorage.setItem('aiw-chat-history',JSON.stringify(chatHistory));
+            aiDiv.innerHTML  = sanitize(assistantBuffer);
+            messages.scrollTop = messages.scrollHeight;
+
+            const i = chatHistory.length - 1;
+            if(i >= 0 && chatHistory[i].role === 'assistant'){
+              chatHistory[i].content = aiDiv.innerHTML;
+              if(useHistory) localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
             }
           }
         }
-        // After streaming, if no normal message, but tool result is present, render it if allowed
+
+        // Stream ended – if no plain text but tool output exists, show it
         if(!assistantBuffer && lastToolResult && showToolResults){
-          try {
+          try{
             const obj = JSON.parse(lastToolResult);
             aiDiv.innerHTML = `<pre>${sanitize(JSON.stringify(obj, null, 2))}</pre>`;
-          } catch {
+          }catch{
             aiDiv.innerHTML = sanitize(lastToolResult);
           }
         }
-      }else{
-        const res=await fetch(`${BACKEND}/chat`,{
-          method:'POST',mode:'cors',headers,
-          body:JSON.stringify({message:msg,previous_response_id:prevID}),signal
+
+      }else{ // Non-stream fallback
+        const res = await fetch(`${BACKEND}/chat`, {
+          method:'POST', mode:'cors', headers,
+          body:JSON.stringify({message:msg, previous_response_id:prevID}),
+          signal,
         });
         if(!res.ok) throw new Error('Network error');
-        const j=await res.json(); addDebug('← response',JSON.stringify(j));
+        const j = await res.json();
+        addDebug('← response', JSON.stringify(j));
+
         stopDots(aiDiv);
-        const reply=j.response||j.error||'No response';
+        const reply = j.response || j.error || 'No response';
+
         if(looksLikeToolPayload(reply)){
           if(showToolResults){
-            try {
+            try{
               const obj = JSON.parse(reply);
               aiDiv.innerHTML = `<pre>${sanitize(JSON.stringify(obj, null, 2))}</pre>`;
-            } catch {
+            }catch{
               aiDiv.innerHTML = sanitize(reply);
             }
           }
-        } else {
+        }else{
           aiDiv.innerHTML = sanitize(reply);
         }
-        const i=chatHistory.length-1;
-        if(i>=0&&chatHistory[i].role==='assistant'){
-          chatHistory[i].content=aiDiv.innerHTML;
-          if(useHistory) localStorage.setItem('aiw-chat-history',JSON.stringify(chatHistory));
+
+        const i = chatHistory.length - 1;
+        if(i >= 0 && chatHistory[i].role === 'assistant'){
+          chatHistory[i].content = aiDiv.innerHTML;
+          if(useHistory) localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
         }
-        if(j.prev_id){prevID=j.prev_id;if(useHistory) localStorage.setItem('aiw-prevID',prevID);}
+        if(j.prev_id){
+          prevID = j.prev_id;
+          if(useHistory) localStorage.setItem('aiw-prevID', prevID);
+        }
       }
 
     }catch(err){
-      if(err.name==='AbortError'){aiDiv.remove();return;}
-      console.error('[aiw]',err); addDebug('! error',err.message||String(err));
-      stopDots(aiDiv); aiDiv.textContent='Error contacting server';
-      const i=chatHistory.length-1;
-      if(i>=0&&chatHistory[i].role==='assistant'){
-        chatHistory[i].content='Error contacting server';
-        if(useHistory) localStorage.setItem('aiw-chat-history',JSON.stringify(chatHistory));
+      if(err.name === 'AbortError'){ aiDiv.remove(); return; }
+      console.error('[aiw]', err);
+      addDebug('! error', err.message || String(err));
+      stopDots(aiDiv);
+      aiDiv.textContent = 'Error contacting server';
+
+      const i = chatHistory.length - 1;
+      if(i >= 0 && chatHistory[i].role === 'assistant'){
+        chatHistory[i].content = 'Error contacting server';
+        if(useHistory) localStorage.setItem('aiw-chat-history', JSON.stringify(chatHistory));
       }
 
     }finally{
-      chatBusy=false; aiDiv.classList.remove('typing');
-      currentFetchController=currentReader=null; textarea.focus();
+      chatBusy = false;
+      aiDiv.classList.remove('typing');
+      currentFetchController = currentReader = null;
+      textarea.focus();
     }
   }
 
   function abortActiveRequest(){
-    if(currentFetchController){currentFetchController.abort();currentFetchController=null;}
-    if(currentReader){currentReader.cancel();currentReader=null;}
+    if(currentFetchController){ currentFetchController.abort(); currentFetchController = null; }
+    if(currentReader){ currentReader.cancel(); currentReader = null; }
   }
 
-  // 10. INITIAL SETUP
-  if(chatHistory.length===0) addDefaultMessages(); else restoreHistory();
+  // 10. INITIAL SETUP ───────────────────────────────────────────────────────
+  if(chatHistory.length === 0) addDefaultMessages(); else restoreHistory();
 
+  // Auto-open after delay on first visit
   setTimeout(()=>{
-    if(box.style.display!=='flex'&&!userOpenedChat){
-      box.style.display='flex'; setCompact(); box.classList.add('aiw-auto-open');
+    if(box.style.display!=='flex' && !userOpenedChat){
+      box.style.display = 'flex';
+      setCompact();
+      box.classList.add('aiw-auto-open');
     }
-  },10_000);
-  box.addEventListener('animationend',e=>{
-    if(e.animationName==='aiwBoxPop') box.classList.remove('aiw-auto-open');
+  }, 10_000);
+  box.addEventListener('animationend', e=>{
+    if(e.animationName === 'aiwBoxPop') box.classList.remove('aiw-auto-open');
   });
 
+  // Ensure debug panel starts closed
   setDebugPanel(false);
 
 })();
