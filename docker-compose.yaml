@@ -17,6 +17,7 @@ services:
     environment:
       TELCO_BASE_URL: "https://semantic-lookup-v2-821847034291.us-central1.run.app"
       TELCO_QUERY_KEY: "qk_live_1a3f69c5e84b4be9a5f01f2cd3e2d7e9"
+      RECIPIENT: "viktor.voronov@ringinx.com"
 
   # Business-logic Flask app that talks to MCP
   app:
@@ -29,7 +30,7 @@ services:
     ports:
       - "5005:5005"         # publish to host
     environment:
-      MCP_SERVER_URL: "http://mcp:8000/mcp/"   # points at the mcp container
+      MCP_SERVER_URL: "http://mcp:8000"   # points at the mcp container
 
   # Front-end / demo UI running on uvicorn (port 8001 inside)
   ui:
